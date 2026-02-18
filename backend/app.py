@@ -142,6 +142,20 @@ def get_scenarios():
 
 
 # ---------------------
+#  GET  /pipelines
+# ---------------------
+
+PIPELINES = [
+    {"id": "baseline", "label": "Baseline (LLM only)"},
+]
+
+@app.get("/pipelines")
+def get_pipelines():
+    """Return the list of available diagnosis pipelines for the dropdown."""
+    return {"pipelines": PIPELINES}
+
+
+# ---------------------
 #  POST /diagnose
 # ---------------------
 

@@ -1,10 +1,10 @@
 import os
+import re
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 
 from openai import OpenAI
 
@@ -100,6 +100,47 @@ def _find_and_apply_scenario(scenario_id: str, network: str):
     raise HTTPException(404, f"Scenario '{scenario_id}' not found in factory")
 
 
+def _parse_llm_report(report: str) -> dict:
+    """
+    Parse LLM markdown report into rootCauses, affectedComponents, correctiveActions.
+    Extracts bullet items (- or *) under each ## section.
+    """
+    result = {"rootCauses": [], "affectedComponents": [], "correctiveActions": []}
+
+    def extract_bullets(text: str, section: str) -> list[str]:
+        # Match ## Section Name (optional suffix) \n then content until next ## or end
+        pattern = rf"##\s*{re.escape(section)}[^\n]*\n(.*?)(?=##|\Z)"
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        if not match:
+            return []
+        content = match.group(1).strip()
+        items = []
+        for line in content.split("\n"):
+            line = line.strip()
+            if line and (line.startswith("-") or line.startswith("*")):
+                item = line.lstrip("-*").strip()
+                if item:
+                    items.append(item)
+        return items
+
+    result["rootCauses"] = extract_bullets(report, "Root Causes")
+    result["affectedComponents"] = extract_bullets(report, "Affected Components")
+    result["correctiveActions"] = extract_bullets(report, "Corrective Actions")
+
+    return result
+
+
+def _build_pipeline_result(report: str, analysis_status: str = "success") -> dict:
+    """Build pipeline result with analysisStatus and parsed fields."""
+    parsed = _parse_llm_report(report)
+    return {
+        "analysisStatus": analysis_status,
+        "rootCauses": parsed["rootCauses"],
+        "affectedComponents": parsed["affectedComponents"],
+        "correctiveActions": parsed["correctiveActions"],
+    }
+
+
 # ---------------------
 #  Models
 # ---------------------
@@ -113,12 +154,8 @@ class DiagnoseRequest(BaseModel):
 
 class DiagnoseResult(BaseModel):
     """Response body returned by the /diagnose endpoint."""
-    network: str
-    scenario: str
-    pipeline: str
-    converged: bool
-    report: str
-    evidence: Optional[dict] = None         # raw evidence data
+    baseline: dict
+    agentic: dict
 
 
 # ---------------------
@@ -162,8 +199,8 @@ def get_pipelines():
 @app.post("/diagnose", response_model=DiagnoseResult)
 def run_diagnose(req: DiagnoseRequest):
     """
-    Run the selected scenario on the chosen network through the
-    specified pipeline (baseline or agentic) and return the diagnosis report.
+    Run the selected scenario on the chosen network through both
+    baseline and agentic pipelines, returning structured diagnosis results.
     """
     # Validate network
     valid_networks = [n["id"] for n in NETWORKS]
@@ -175,26 +212,25 @@ def run_diagnose(req: DiagnoseRequest):
     net = scenario_obj.net
 
     # Attempt power flow
-    converged = scenario_obj.run_pf()
+    scenario_obj.run_pf()
 
-    if req.pipeline == "baseline":
-        # --- Baseline pipeline: send network state to LLM ---
-        result = _baseline_agent.diagnose(net, network_name=req.network)
-        report = result["response"]
-        evidence = result.get("evidence")
-    else:
-        # TODO: agentic pipeline
-        report = "(Agentic pipeline not yet implemented)"
-        evidence = None
+    # --- Baseline pipeline ---
+    baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
+    baseline_report = baseline_result["response"]
+    baseline_status = "success"
+    if baseline_report.startswith("LLM call failed"):
+        baseline_status = "error"
+    baseline = _build_pipeline_result(baseline_report, baseline_status)
 
-    return DiagnoseResult(
-        network=req.network,
-        scenario=req.scenario,
-        pipeline=req.pipeline,
-        converged=converged,
-        report=report,
-        evidence=evidence,
-    )
+    # --- Agentic pipeline (stub until implemented) ---
+    agentic = {
+        "analysisStatus": "not_implemented",
+        "rootCauses": [],
+        "affectedComponents": [],
+        "correctiveActions": [],
+    }
+
+    return DiagnoseResult(baseline=baseline, agentic=agentic)
 
 
 # ---------------------

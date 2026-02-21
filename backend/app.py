@@ -103,35 +103,67 @@ def _find_and_apply_scenario(scenario_id: str, network: str):
 def _parse_llm_report(report: str) -> dict:
     """
     Parse LLM markdown report into rootCauses, affectedComponents, correctiveActions.
-    Extracts bullet items (- or *) under each ## section.
+    Tries to be robust to:
+      - Sections appearing on the same line (no newlines)
+      - Bulleted lists (-, *) and numbered lists (1., 2., ...)
+      - Optional text after section headers (e.g. "## Root Causes (ranked...)")
     """
     result = {"rootCauses": [], "affectedComponents": [], "correctiveActions": []}
 
-    def extract_bullets(text: str, section: str) -> list[str]:
-        # Match ## Section Name (optional suffix) \n then content until next ## or end
-        pattern = rf"##\s*{re.escape(section)}[^\n]*\n(.*?)(?=##|\Z)"
-        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-        if not match:
-            return []
-        content = match.group(1).strip()
-        items = []
-        for line in content.split("\n"):
+    def _normalize_block(text: str) -> str:
+        """
+        Insert newlines to make list-like content line-oriented.
+        We only split numbered items when the dot is followed by whitespace,
+        so we don't break decimals like 11.77 or 1.08.
+        """
+        text = text.strip()
+        # Force each heading to start a new line (handles one-line outputs)
+        text = re.sub(r"\s*(##\s*)", r"\n\1", text)
+        # Convert " - " into real bullets on new lines
+        text = re.sub(r"\s-\s", r"\n- ", text)
+        # Convert " 1. " into numbered items on new lines (dot must be followed by whitespace)
+        text = re.sub(r"\s(\d+)\.\s+", r"\n\1. ", text)
+        return text.strip()
+
+    def _extract_items(block: str) -> list[str]:
+        items: list[str] = []
+        for line in _normalize_block(block).split("\n"):
             line = line.strip()
-            if line and (line.startswith("-") or line.startswith("*")):
+            if not line:
+                continue
+            if line.startswith(("-", "*")):
                 item = line.lstrip("-*").strip()
                 if item:
                     items.append(item)
+                continue
+            if re.match(r"^\d+\.\s+", line):
+                item = re.sub(r"^\d+\.\s+", "", line).strip()
+                if item:
+                    items.append(item)
+                continue
         return items
 
-    result["rootCauses"] = extract_bullets(report, "Root Causes")
-    result["affectedComponents"] = extract_bullets(report, "Affected Components")
-    result["correctiveActions"] = extract_bullets(report, "Corrective Actions")
+    def extract_section_items(text: str, section: str) -> list[str]:
+        # Match section header (optional suffix) then capture until next "##" or end.
+        # Don't require a newline after the header.
+        pattern = rf"##\s*{re.escape(section)}[^\n#]*\s*(.*?)(?=\s*##\s|\Z)"
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        if not match:
+            return []
+        return _extract_items(match.group(1))
+
+    result["rootCauses"] = extract_section_items(report, "Root Causes")
+    result["affectedComponents"] = extract_section_items(report, "Affected Components")
+    result["correctiveActions"] = extract_section_items(report, "Corrective Actions")
 
     return result
 
 
 def _build_pipeline_result(report: str, analysis_status: str = "success") -> dict:
     """Build pipeline result with analysisStatus and parsed fields."""
+    print('========================================')
+    print(report)
+    print('========================================')
     parsed = _parse_llm_report(report)
     return {
         "analysisStatus": analysis_status,
@@ -177,19 +209,6 @@ def get_scenarios():
     """Return the list of available failure scenarios for the dropdown."""
     return {"scenarios": SCENARIOS}
 
-
-# ---------------------
-#  GET  /pipelines
-# ---------------------
-
-PIPELINES = [
-    {"id": "baseline", "label": "Baseline (LLM only)"},
-]
-
-@app.get("/pipelines")
-def get_pipelines():
-    """Return the list of available diagnosis pipelines for the dropdown."""
-    return {"pipelines": PIPELINES}
 
 
 # ---------------------

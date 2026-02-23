@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { PipelineResult } from '@/types/diagnostic';
 import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 interface ResultsPanelProps {
   result: PipelineResult | null;
@@ -74,7 +75,9 @@ export function ResultsPanel({ result, isLoading, error }: ResultsPanelProps) {
                 {result.rootCauses.map((cause, index) => (
                   <li key={index} className="flex items-start gap-2">
                     <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
-                    <span className="text-sm">{cause}</span>
+                    <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                      <ReactMarkdown>{cause}</ReactMarkdown>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -100,7 +103,9 @@ export function ResultsPanel({ result, isLoading, error }: ResultsPanelProps) {
                 {result.affectedComponents.map((component, index) => (
                   <li key={index} className="flex items-start gap-2">
                     <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
-                    <span className="text-sm">{component}</span>
+                    <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                      <ReactMarkdown>{component}</ReactMarkdown>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -126,7 +131,9 @@ export function ResultsPanel({ result, isLoading, error }: ResultsPanelProps) {
                 {result.correctiveActions.map((action, index) => (
                   <li key={index} className="flex items-start gap-2">
                     <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
-                    <span className="text-sm">{action}</span>
+                    <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                      <ReactMarkdown>{action}</ReactMarkdown>
+                    </div>
                   </li>
                 ))}
               </ul>

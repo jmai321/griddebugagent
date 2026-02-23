@@ -1,28 +1,24 @@
-export interface ComponentDetail {
+// API response types
+
+export interface Network {
   id: string;
-  name: string;
-  type: 'bus' | 'line' | 'generator' | 'transformer';
-  value: number;
+  label: string;
 }
 
-export interface Action {
+export interface Scenario {
   id: string;
-  description: string;
-  priority: 'high' | 'medium' | 'low';
-  category: 'load_shedding' | 'generation_adjustment' | 'topology_change' | 'parameter_adjustment';
+  label: string;
+  category: 'nonconvergence' | 'voltage' | 'thermal' | 'contingency';
 }
 
-export interface DiagnosticResult {
+export interface PipelineResult {
+  analysisStatus: 'success' | 'error' | 'not_implemented';
   rootCauses: string[];
-  affectedComponents: ComponentDetail[];
-  correctiveActions: Action[];
-  analysisStatus: 'success' | 'partial' | 'failed';
+  affectedComponents: string[];
+  correctiveActions: string[];
 }
 
-export interface TestCase {
-  id: string;
-  name: string;
-  description: string;
-  busSystem: '14' | '30' | '57';
-  failureType: 'non_convergence' | 'voltage_violation' | 'line_overload';
+export interface DiagnoseResponse {
+  baseline: PipelineResult;
+  agentic: PipelineResult;
 }

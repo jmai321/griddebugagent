@@ -3,18 +3,26 @@
 import { useState } from 'react';
 import { InputPanel } from './input-panel';
 import { ResultsPanel } from './results-panel';
-import { DiagnosticResult } from '@/types/diagnostic';
-import { mockDiagnosticResult } from '@/data/mock-data';
+import { PipelineResult } from '@/types/diagnostic';
+import { runDiagnosis } from '@/lib/api';
 
 export function DiagnosticLayout() {
-  const [result, setResult] = useState<DiagnosticResult | null>(null);
+  const [result, setResult] = useState<PipelineResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // TODO: Replace with async API call to POST /diagnose with testCaseId
-  const handleAnalyze = (testCaseId: string) => {
+  const handleAnalyze = async (network: string, scenario: string) => {
     setIsLoading(true);
-    setResult(mockDiagnosticResult);
-    setIsLoading(false);
+    setError(null);
+    try {
+      const response = await runDiagnosis(network, scenario);
+      setResult(response.baseline);
+    } catch {
+      setError('Analysis failed. Please try again.');
+      setResult(null);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -23,7 +31,7 @@ export function DiagnosticLayout() {
         <InputPanel onAnalyze={handleAnalyze} isLoading={isLoading} />
       </div>
       <div className="w-1/2">
-        <ResultsPanel result={result} isLoading={isLoading} />
+        <ResultsPanel result={result} isLoading={isLoading} error={error} />
       </div>
     </div>
   );

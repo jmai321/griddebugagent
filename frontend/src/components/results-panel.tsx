@@ -2,41 +2,32 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
-import { DiagnosticResult } from '@/types/diagnostic';
-import { AlertCircle, CheckCircle2, Zap, Power, Cable, Factory, Loader2, Lightbulb } from 'lucide-react';
+import { PipelineResult } from '@/types/diagnostic';
+import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 interface ResultsPanelProps {
-  result: DiagnosticResult | null;
+  result: PipelineResult | null;
   isLoading: boolean;
+  error: string | null;
 }
 
-const componentTypeIcons = {
-  bus: Power,
-  line: Cable,
-  generator: Factory,
-  transformer: Zap
-};
-
-const actionCategoryLabels = {
-  load_shedding: 'Load Shedding',
-  generation_adjustment: 'Generation Adjustment',
-  topology_change: 'Topology Change',
-  parameter_adjustment: 'Parameter Adjustment'
-};
-
-const priorityStyles = {
-  high: 'bg-destructive text-white',
-  medium: 'bg-warning text-white',
-  low: 'bg-muted text-muted-foreground'
-};
-
-export function ResultsPanel({ result, isLoading }: ResultsPanelProps) {
+export function ResultsPanel({ result, isLoading, error }: ResultsPanelProps) {
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-6" role="status" aria-label="Loading">
         <Loader2 className="h-10 w-10 text-muted-foreground animate-spin mb-4" />
         <p className="text-muted-foreground">Analyzing power flow failure...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-6 text-center">
+        <AlertCircle className="h-12 w-12 text-destructive mb-4" />
+        <h3 className="text-lg font-medium mb-2">Analysis Error</h3>
+        <p className="text-muted-foreground">{error}</p>
       </div>
     );
   }
@@ -47,7 +38,7 @@ export function ResultsPanel({ result, isLoading }: ResultsPanelProps) {
         <AlertCircle className="h-12 w-12 text-muted-foreground mb-4" />
         <h3 className="text-lg font-medium mb-2">No Analysis Results</h3>
         <p className="text-muted-foreground">
-          Select a test case and run analysis to see diagnostic results
+          Select a network and scenario, then run analysis
         </p>
       </div>
     );
@@ -79,14 +70,20 @@ export function ResultsPanel({ result, isLoading }: ResultsPanelProps) {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ul className="space-y-2">
-              {result.rootCauses.map((cause, index) => (
-                <li key={index} className="flex items-start gap-2">
-                  <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0"></span>
-                  <span className="text-sm">{cause}</span>
-                </li>
-              ))}
-            </ul>
+            {result.rootCauses.length > 0 ? (
+              <ul className="space-y-2">
+                {result.rootCauses.map((cause, index) => (
+                  <li key={index} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
+                    <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                      <ReactMarkdown>{cause}</ReactMarkdown>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">No root causes identified</p>
+            )}
           </CardContent>
         </Card>
 
@@ -97,28 +94,24 @@ export function ResultsPanel({ result, isLoading }: ResultsPanelProps) {
               Affected Components
             </CardTitle>
             <CardDescription>
-              System components with violations
+              System components involved in the failure
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {result.affectedComponents.map((component) => {
-                const IconComponent = componentTypeIcons[component.type];
-                return (
-                  <div key={component.id} className="flex items-center p-3 rounded-lg bg-muted/50">
-                    <div className="flex items-center gap-3">
-                      <IconComponent className="h-4 w-4 text-muted-foreground" />
-                      <div>
-                        <p className="font-medium text-sm">{component.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {component.type} • {component.value.toFixed(2)}
-                        </p>
-                      </div>
+            {result.affectedComponents.length > 0 ? (
+              <ul className="space-y-2">
+                {result.affectedComponents.map((component, index) => (
+                  <li key={index} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
+                    <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                      <ReactMarkdown>{component}</ReactMarkdown>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">No components identified</p>
+            )}
           </CardContent>
         </Card>
 
@@ -133,24 +126,20 @@ export function ResultsPanel({ result, isLoading }: ResultsPanelProps) {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {result.correctiveActions.map((action, index) => (
-                <div key={action.id}>
-                  <div className="flex items-start justify-between mb-2">
-                    <p className="text-sm font-medium pr-4">{action.description}</p>
-                    <Badge className={`text-xs ${priorityStyles[action.priority]}`}>
-                      {action.priority}
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {actionCategoryLabels[action.category]}
-                  </p>
-                  {index < result.correctiveActions.length - 1 && (
-                    <Separator className="mt-4" />
-                  )}
-                </div>
-              ))}
-            </div>
+            {result.correctiveActions.length > 0 ? (
+              <ul className="space-y-2">
+                {result.correctiveActions.map((action, index) => (
+                  <li key={index} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
+                    <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                      <ReactMarkdown>{action}</ReactMarkdown>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">No recommendations available</p>
+            )}
           </CardContent>
         </Card>
       </div>

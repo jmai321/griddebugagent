@@ -1,27 +1,48 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { testCases } from '@/data/mock-data';
+import { Network, Scenario } from '@/types/diagnostic';
+import { fetchNetworks, fetchScenarios } from '@/lib/api';
 
 interface InputPanelProps {
-  onAnalyze: (testCaseId: string) => void;
+  onAnalyze: (network: string, scenario: string) => void;
   isLoading: boolean;
 }
 
 export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
-  const [selectedTestCase, setSelectedTestCase] = useState<string>('');
+  const [networks, setNetworks] = useState<Network[]>([]);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [selectedNetwork, setSelectedNetwork] = useState<string>('');
+  const [selectedScenario, setSelectedScenario] = useState<string>('');
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [networksData, scenariosData] = await Promise.all([
+          fetchNetworks(),
+          fetchScenarios(),
+        ]);
+        setNetworks(networksData);
+        setScenarios(scenariosData);
+        setFetchError(null);
+      } catch {
+        setFetchError('Failed to load data. Is the backend running?');
+      }
+    }
+    loadData();
+  }, []);
 
   const handleAnalyze = () => {
-    if (selectedTestCase) {
-      onAnalyze(selectedTestCase);
+    if (selectedNetwork && selectedScenario) {
+      onAnalyze(selectedNetwork, selectedScenario);
     }
   };
 
-  const selectedTestCaseData = testCases.find(tc => tc.id === selectedTestCase);
+  const selectedScenarioData = scenarios.find(s => s.id === selectedScenario);
 
   return (
     <div className="flex flex-col h-full p-6">
@@ -32,26 +53,55 @@ export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
         </p>
       </div>
 
+      {fetchError && (
+        <div className="mb-4 p-3 bg-destructive/10 text-destructive rounded-md text-sm">
+          {fetchError}
+        </div>
+      )}
+
       <div className="flex-1 space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Select Test Case</CardTitle>
+            <CardTitle className="text-lg">Network</CardTitle>
             <CardDescription>
-              Choose a failing power flow test case to analyze
+              Select an IEEE test network
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Select value={selectedNetwork} onValueChange={setSelectedNetwork}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select network..." />
+              </SelectTrigger>
+              <SelectContent>
+                {networks.map((network) => (
+                  <SelectItem key={network.id} value={network.id}>
+                    {network.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Failure Scenario</CardTitle>
+            <CardDescription>
+              Choose a failure scenario to diagnose
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Select value={selectedTestCase} onValueChange={setSelectedTestCase}>
+            <Select value={selectedScenario} onValueChange={setSelectedScenario}>
               <SelectTrigger>
-                <SelectValue placeholder="Select a test case..." />
+                <SelectValue placeholder="Select scenario..." />
               </SelectTrigger>
               <SelectContent>
-                {testCases.map((testCase) => (
-                  <SelectItem key={testCase.id} value={testCase.id}>
+                {scenarios.map((scenario) => (
+                  <SelectItem key={scenario.id} value={scenario.id}>
                     <div className="flex flex-col items-start">
-                      <span>{testCase.name}</span>
+                      <span>{scenario.label}</span>
                       <span className="text-xs text-muted-foreground">
-                        IEEE {testCase.busSystem}-bus • {testCase.failureType.replace('_', ' ')}
+                        {scenario.category}
                       </span>
                     </div>
                   </SelectItem>
@@ -59,29 +109,17 @@ export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
               </SelectContent>
             </Select>
 
-            {selectedTestCaseData && (
-              <Card className="bg-muted/50">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <Badge variant="outline">
-                      IEEE {selectedTestCaseData.busSystem}-bus
-                    </Badge>
-                    <Badge variant="secondary">
-                      {selectedTestCaseData.failureType.replace('_', ' ')}
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    {selectedTestCaseData.description}
-                  </p>
-                </CardContent>
-              </Card>
+            {selectedScenarioData && (
+              <div className="p-3 bg-muted/50 rounded-md text-sm text-muted-foreground">
+                Category: {selectedScenarioData.category}
+              </div>
             )}
           </CardContent>
         </Card>
 
         <Button
           onClick={handleAnalyze}
-          disabled={!selectedTestCase || isLoading}
+          disabled={!selectedNetwork || !selectedScenario || isLoading}
           className="w-full"
           size="lg"
         >

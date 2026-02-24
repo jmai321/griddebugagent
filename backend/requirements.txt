@@ -5,3 +5,4 @@ pandapower
 openai
 python-dotenv
 numba
+matplotlib

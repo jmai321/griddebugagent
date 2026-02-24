@@ -3,8 +3,10 @@ import re
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import json
 
 from openai import OpenAI
 
@@ -209,6 +211,60 @@ def get_scenarios():
     """Return the list of available failure scenarios for the dropdown."""
     return {"scenarios": SCENARIOS}
 
+
+
+# ---------------------
+#  GET  /api/visualize
+# ---------------------
+
+@app.get("/api/visualize/{network}/{scenario}", response_class=HTMLResponse)
+def get_visualization(network: str, scenario: str):
+    """
+    Generate an interactive Plotly HTML visualization of the power network
+    for a given scenario to verify testcases visually.
+    """
+    try:
+        from pandapower.plotting.plotly import simple_plotly
+    except ImportError:
+        return HTMLResponse("Plotly is not installed. Run `pip install plotly matplotlib`", status_code=500)
+    
+    # Apply the scenario to get a modified network
+    scenario_obj, _ = _find_and_apply_scenario(scenario, network)
+    net = scenario_obj.net
+    
+    try:
+        fig = simple_plotly(net)
+        html_content = fig.to_html(include_plotlyjs="cdn", full_html=True)
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        return HTMLResponse(content=f"Error generating plot: {e}", status_code=500)
+
+
+# ---------------------
+#  GET  /api/network_state
+# ---------------------
+
+@app.get("/api/network_state/{network}/{scenario}")
+def get_network_state(network: str, scenario: str):
+    """
+    Return the raw network components data (buses, lines, generators)
+    for a specific scenario to verify testcases programmatically.
+    """
+    scenario_obj, _ = _find_and_apply_scenario(scenario, network)
+    net = scenario_obj.net
+    
+    # Try running power flow to get res_bus and res_line if possible
+    scenario_obj.run_pf()
+    
+    # Convert DataFrames to dicts, handling NaNs
+    return {
+        "bus": json.loads(net.bus.to_json(orient="records")),
+        "line": json.loads(net.line.to_json(orient="records")),
+        "load": json.loads(net.load.to_json(orient="records")),
+        "gen": json.loads(net.gen.to_json(orient="records")),
+        "res_bus": json.loads(net.res_bus.to_json(orient="records")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else [],
+        "res_line": json.loads(net.res_line.to_json(orient="records")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else [],
+    }
 
 
 # ---------------------

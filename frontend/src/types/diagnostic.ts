@@ -12,13 +12,29 @@ export interface Scenario {
 }
 
 export interface PipelineResult {
-  analysisStatus: 'success' | 'error' | 'not_implemented';
+  analysisStatus: 'success' | 'error' | 'not_implemented' | 'skipped';
   rootCauses: string[];
   affectedComponents: string[];
   correctiveActions: string[];
 }
 
 export interface DiagnoseResponse {
+  baseline: PipelineResult;
+  agentic: PipelineResult;
+}
+
+export interface GeneratedGroundTruth {
+  failureType: string;
+  rootCauses: string[];
+  affectedComponents: Record<string, unknown>;
+  knownFix: string;
+}
+
+export interface DiagnoseNLResponse {
+  generationStatus: 'success' | 'error';
+  generationError: string | null;
+  generatedCode: string;
+  generatedGroundTruth: GeneratedGroundTruth | null;
   baseline: PipelineResult;
   agentic: PipelineResult;
 }

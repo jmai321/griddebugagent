@@ -1,4 +1,4 @@
-import { Network, Scenario, DiagnoseResponse } from '@/types/diagnostic';
+import { Network, Scenario, DiagnoseResponse, DiagnoseNLResponse } from '@/types/diagnostic';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -23,5 +23,15 @@ export async function runDiagnosis(network: string, scenario: string): Promise<D
     body: JSON.stringify({ network, scenario }),
   });
   if (!res.ok) throw new Error('Diagnosis request failed');
+  return res.json();
+}
+
+export async function runNLDiagnosis(network: string, description: string): Promise<DiagnoseNLResponse> {
+  const res = await fetch(`${API_BASE}/diagnose_nl`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ network, description }),
+  });
+  if (!res.ok) throw new Error('NL Diagnosis request failed');
   return res.json();
 }

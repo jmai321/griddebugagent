@@ -7,17 +7,30 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Network, Scenario } from '@/types/diagnostic';
 import { fetchNetworks, fetchScenarios } from '@/lib/api';
 
+type InputMode = 'preset' | 'nl';
+
 interface InputPanelProps {
   onAnalyze: (network: string, scenario: string) => void;
+  onAnalyzeNL: (network: string, description: string) => void;
   isLoading: boolean;
 }
 
-export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
+const EXAMPLE_PROMPTS = [
+  'Scale all loads by 15x to cause non-convergence',
+  'Take line 5 out of service and double loads at bus 10',
+  'Disable all generators except the ext_grid',
+  'Add 80 Mvar inductive load at bus 12 to cause voltage sag',
+  'Reduce thermal limits of all lines to 25% of original',
+];
+
+export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProps) {
   const [networks, setNetworks] = useState<Network[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [selectedNetwork, setSelectedNetwork] = useState<string>('');
   const [selectedScenario, setSelectedScenario] = useState<string>('');
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [mode, setMode] = useState<InputMode>('nl');
+  const [nlDescription, setNlDescription] = useState<string>('');
 
   useEffect(() => {
     async function loadData() {
@@ -37,10 +50,21 @@ export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
   }, []);
 
   const handleAnalyze = () => {
-    if (selectedNetwork && selectedScenario) {
-      onAnalyze(selectedNetwork, selectedScenario);
+    if (mode === 'preset') {
+      if (selectedNetwork && selectedScenario) {
+        onAnalyze(selectedNetwork, selectedScenario);
+      }
+    } else {
+      if (selectedNetwork && nlDescription.trim()) {
+        onAnalyzeNL(selectedNetwork, nlDescription.trim());
+      }
     }
   };
+
+  const canRun =
+    mode === 'preset'
+      ? selectedNetwork && selectedScenario
+      : selectedNetwork && nlDescription.trim();
 
   const selectedScenarioData = scenarios.find(s => s.id === selectedScenario);
 
@@ -60,6 +84,29 @@ export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
       )}
 
       <div className="flex-1 space-y-6">
+        {/* Mode Toggle */}
+        <div className="flex rounded-lg border border-border overflow-hidden">
+          <button
+            onClick={() => setMode('nl')}
+            className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${mode === 'nl'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
+              }`}
+          >
+            ✨ Describe Failure
+          </button>
+          <button
+            onClick={() => setMode('preset')}
+            className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${mode === 'preset'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
+              }`}
+          >
+            📋 Preset Scenarios
+          </button>
+        </div>
+
+        {/* Network Selector (shown in both modes) */}
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Network</CardTitle>
@@ -83,47 +130,84 @@ export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Failure Scenario</CardTitle>
-            <CardDescription>
-              Choose a failure scenario to diagnose
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Select value={selectedScenario} onValueChange={setSelectedScenario}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select scenario..." />
-              </SelectTrigger>
-              <SelectContent>
-                {scenarios.map((scenario) => (
-                  <SelectItem key={scenario.id} value={scenario.id}>
-                    <div className="flex flex-col items-start">
-                      <span>{scenario.label}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {scenario.category}
-                      </span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        {/* Preset Mode: Scenario Dropdown */}
+        {mode === 'preset' && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Failure Scenario</CardTitle>
+              <CardDescription>
+                Choose a failure scenario to diagnose
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Select value={selectedScenario} onValueChange={setSelectedScenario}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select scenario..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {scenarios.map((scenario) => (
+                    <SelectItem key={scenario.id} value={scenario.id}>
+                      <div className="flex flex-col items-start">
+                        <span>{scenario.label}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {scenario.category}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-            {selectedScenarioData && (
-              <div className="p-3 bg-muted/50 rounded-md text-sm text-muted-foreground">
-                Category: {selectedScenarioData.category}
+              {selectedScenarioData && (
+                <div className="p-3 bg-muted/50 rounded-md text-sm text-muted-foreground">
+                  Category: {selectedScenarioData.category}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* NL Mode: Text Area + Examples */}
+        {mode === 'nl' && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Describe the Failure</CardTitle>
+              <CardDescription>
+                Tell the agent what failure to simulate in natural language
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <textarea
+                className="w-full min-h-[120px] p-3 rounded-md border border-input bg-background text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                placeholder="e.g. Take line 3 out of service and increase all loads by 5x to cause cascading overloads..."
+                value={nlDescription}
+                onChange={(e) => setNlDescription(e.target.value)}
+              />
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">Try an example:</p>
+                <div className="flex flex-wrap gap-2">
+                  {EXAMPLE_PROMPTS.map((prompt, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setNlDescription(prompt)}
+                      className="text-xs px-2.5 py-1.5 rounded-full border border-border bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
               </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
 
         <Button
           onClick={handleAnalyze}
-          disabled={!selectedNetwork || !selectedScenario || isLoading}
+          disabled={!canRun || isLoading}
           className="w-full"
           size="lg"
         >
-          {isLoading ? 'Analyzing...' : 'Run Analysis'}
+          {isLoading ? 'Analyzing...' : mode === 'nl' ? '✨ Generate & Analyze' : 'Run Analysis'}
         </Button>
       </div>
     </div>

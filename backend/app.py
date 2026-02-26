@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
 
+import pandapower as pp
+
 from openai import OpenAI
 
 from scenarios import (
@@ -17,6 +19,7 @@ from scenarios import (
     ContingencyFailureScenarios,
 )
 from agents.baseline import BaselineAgent
+from scenarios.nl_scenario_generator import NLScenarioGenerator
 
 load_dotenv()
 
@@ -39,6 +42,7 @@ app.add_middleware(
 _openai_key = os.getenv("OPENAI_API_KEY", "")
 _llm_client = OpenAI(api_key=_openai_key) if _openai_key else None
 _baseline_agent = BaselineAgent(llm_client=_llm_client)
+_nl_generator = NLScenarioGenerator(llm_client=_llm_client)
 
 
 # ---------------------
@@ -192,6 +196,12 @@ class DiagnoseResult(BaseModel):
     agentic: dict
 
 
+class DiagnoseNLRequest(BaseModel):
+    """Request body for the /diagnose_nl endpoint."""
+    network: str = "case14"
+    description: str
+
+
 # ---------------------
 #  GET  /networks
 # ---------------------
@@ -306,6 +316,87 @@ def run_diagnose(req: DiagnoseRequest):
     }
 
     return DiagnoseResult(baseline=baseline, agentic=agentic)
+
+
+# ---------------------
+#  POST /diagnose_nl
+# ---------------------
+
+@app.post("/diagnose_nl")
+def run_diagnose_nl(req: DiagnoseNLRequest):
+    """
+    Generate a failure scenario from a natural language description,
+    then run it through the diagnosis pipelines.
+    """
+    # Validate network
+    valid_networks = [n["id"] for n in NETWORKS]
+    if req.network not in valid_networks:
+        raise HTTPException(400, f"Unknown network: {req.network}. Choose from {valid_networks}")
+
+    # Generate the scenario from NL
+    gen_result = _nl_generator.generate(
+        description=req.description,
+        network_name=req.network,
+    )
+
+    if gen_result["generation_status"] != "success":
+        return {
+            "generationStatus": "error",
+            "generationError": gen_result["error"],
+            "generatedCode": gen_result.get("generated_code", ""),
+            "generatedGroundTruth": None,
+            "baseline": {
+                "analysisStatus": "skipped",
+                "rootCauses": [],
+                "affectedComponents": [],
+                "correctiveActions": [],
+            },
+            "agentic": {
+                "analysisStatus": "skipped",
+                "rootCauses": [],
+                "affectedComponents": [],
+                "correctiveActions": [],
+            },
+        }
+
+    net = gen_result["net"]
+    ground_truth = gen_result["ground_truth"]
+
+    # Run power flow
+    try:
+        pp.runpp(net)
+    except Exception:
+        pass
+
+    # --- Baseline pipeline ---
+    baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
+    baseline_report = baseline_result["response"]
+    baseline_status = "success"
+    if baseline_report.startswith("LLM call failed"):
+        baseline_status = "error"
+    baseline = _build_pipeline_result(baseline_report, baseline_status)
+
+    # --- Agentic pipeline (stub) ---
+    agentic = {
+        "analysisStatus": "not_implemented",
+        "rootCauses": [],
+        "affectedComponents": [],
+        "correctiveActions": [],
+    }
+
+    return {
+        "generationStatus": "success",
+        "generationError": None,
+        "generatedCode": gen_result["generated_code"],
+        "generatedGroundTruth": {
+            "failureType": ground_truth.failure_type,
+            "rootCauses": ground_truth.root_causes,
+            "affectedComponents": ground_truth.affected_components,
+            "knownFix": ground_truth.known_fix,
+        },
+        "baseline": baseline,
+        "agentic": agentic,
+    }
 
 
 # ---------------------

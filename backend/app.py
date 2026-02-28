@@ -14,7 +14,15 @@ from scenarios import (
     ThermalOverloadScenarios,
     ContingencyFailureScenarios,
 )
+from scenarios.base_scenarios import load_network
 from agents.baseline import BaselineAgent
+
+try:
+    from pandapower.topology import create_nxgraph
+    import networkx as nx
+    _HAS_NX = True
+except ImportError:
+    _HAS_NX = False
 
 load_dotenv()
 
@@ -98,6 +106,81 @@ def _find_and_apply_scenario(scenario_id: str, network: str):
             return sc, result
 
     raise HTTPException(404, f"Scenario '{scenario_id}' not found in factory")
+
+
+def _get_network_for_topology(network: str, scenario: str | None):
+    """Return pandapower net for topology: base network or with scenario applied."""
+    if scenario:
+        scenario_obj, _ = _find_and_apply_scenario(scenario, network)
+        return scenario_obj.net
+    return load_network(network)
+
+
+def _build_topology(net) -> dict:
+    """
+    Build nodes (buses) and edges (lines + trafos) with positions for frontend graph.
+    Uses net.bus_geodata if present, else networkx spring_layout.
+    """
+    nodes = []
+    bus_ids = list(net.bus.index)
+    in_service = net.bus["in_service"].to_dict()
+
+    # Resolve (x, y) for each bus
+    positions = {}
+    if hasattr(net, "bus_geodata") and net.bus_geodata is not None and len(net.bus_geodata) > 0:
+        for bus_id in bus_ids:
+            if bus_id in net.bus_geodata.index:
+                row = net.bus_geodata.loc[bus_id]
+                x = float(row.get("x", 0))
+                y = float(row.get("y", 0))
+                positions[bus_id] = (x, y)
+    if len(positions) < len(bus_ids):
+        if _HAS_NX:
+            G = create_nxgraph(net, respect_switches=False)
+            pos = nx.spring_layout(G, seed=42, k=1.5)
+            for bus_id in bus_ids:
+                if bus_id in pos:
+                    positions[bus_id] = (float(pos[bus_id][0]), float(pos[bus_id][1]))
+        else:
+            # Fallback: place buses in a circle
+            import math
+            n = len(bus_ids)
+            for i, bus_id in enumerate(bus_ids):
+                angle = 2 * math.pi * i / n if n else 0
+                positions[bus_id] = (math.cos(angle), math.sin(angle))
+    for bus_id in bus_ids:
+        x, y = positions.get(bus_id, (0.0, 0.0))
+        name = net.bus.at[bus_id, "name"] if "name" in net.bus.columns else f"Bus {bus_id}"
+        nodes.append({
+            "id": str(bus_id),
+            "busId": int(bus_id),
+            "label": str(name),
+            "x": round(x, 4),
+            "y": round(y, 4),
+            "in_service": bool(in_service.get(bus_id, True)),
+        })
+
+    edges = []
+    for idx, row in net.line.iterrows():
+        edges.append({
+            "id": f"line-{idx}",
+            "source": str(int(row["from_bus"])),
+            "target": str(int(row["to_bus"])),
+            "type": "line",
+            "lineIndex": int(idx),
+            "in_service": bool(row.get("in_service", True)),
+        })
+    for idx, row in net.trafo.iterrows():
+        edges.append({
+            "id": f"trafo-{idx}",
+            "source": str(int(row["hv_bus"])),
+            "target": str(int(row["lv_bus"])),
+            "type": "trafo",
+            "trafoIndex": int(idx),
+            "in_service": bool(row.get("in_service", True)),
+        })
+
+    return {"nodes": nodes, "edges": edges}
 
 
 def _parse_llm_report(report: str) -> dict:
@@ -209,6 +292,26 @@ def get_scenarios():
     """Return the list of available failure scenarios for the dropdown."""
     return {"scenarios": SCENARIOS}
 
+
+# ---------------------
+#  GET  /topology
+# ---------------------
+
+@app.get("/topology")
+def get_topology(network: str = "case14", scenario: str | None = None):
+    """
+    Return network topology for graph visualization: nodes (buses) and edges (lines, trafos)
+    with coordinates. Optional query param scenario applies that scenario before returning topology.
+    """
+    valid_networks = [n["id"] for n in NETWORKS]
+    if network not in valid_networks:
+        raise HTTPException(400, f"Unknown network: {network}. Choose from {valid_networks}")
+    if scenario is not None:
+        entry = next((s for s in SCENARIOS if s["id"] == scenario), None)
+        if entry is None:
+            raise HTTPException(404, f"Unknown scenario: {scenario}")
+    net = _get_network_for_topology(network, scenario)
+    return _build_topology(net)
 
 
 # ---------------------

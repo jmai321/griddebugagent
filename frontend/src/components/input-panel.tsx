@@ -10,13 +10,22 @@ import { fetchNetworks, fetchScenarios } from '@/lib/api';
 interface InputPanelProps {
   onAnalyze: (network: string, scenario: string) => void;
   isLoading: boolean;
+  selectedNetwork: string;
+  selectedScenario: string;
+  onNetworkChange: (value: string) => void;
+  onScenarioChange: (value: string) => void;
 }
 
-export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
+export function InputPanel({
+  onAnalyze,
+  isLoading,
+  selectedNetwork,
+  selectedScenario,
+  onNetworkChange,
+  onScenarioChange,
+}: InputPanelProps) {
   const [networks, setNetworks] = useState<Network[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [selectedNetwork, setSelectedNetwork] = useState<string>('');
-  const [selectedScenario, setSelectedScenario] = useState<string>('');
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -68,7 +77,7 @@ export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Select value={selectedNetwork} onValueChange={setSelectedNetwork}>
+            <Select value={selectedNetwork} onValueChange={onNetworkChange}>
               <SelectTrigger>
                 <SelectValue placeholder="Select network..." />
               </SelectTrigger>
@@ -91,7 +100,7 @@ export function InputPanel({ onAnalyze, isLoading }: InputPanelProps) {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Select value={selectedScenario} onValueChange={setSelectedScenario}>
+            <Select value={selectedScenario} onValueChange={onScenarioChange}>
               <SelectTrigger>
                 <SelectValue placeholder="Select scenario..." />
               </SelectTrigger>

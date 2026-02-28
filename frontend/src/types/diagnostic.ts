@@ -22,3 +22,28 @@ export interface DiagnoseResponse {
   baseline: PipelineResult;
   agentic: PipelineResult;
 }
+
+// Topology graph (nodes = buses, edges = lines/trafos)
+export interface TopologyNode {
+  id: string;
+  busId: number;
+  label: string;
+  x: number;
+  y: number;
+  in_service: boolean;
+}
+
+export interface TopologyEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: 'line' | 'trafo';
+  lineIndex?: number;
+  trafoIndex?: number;
+  in_service: boolean;
+}
+
+export interface TopologyResponse {
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+}

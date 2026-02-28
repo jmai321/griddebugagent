@@ -89,8 +89,8 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProp
           <button
             onClick={() => setMode('nl')}
             className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${mode === 'nl'
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
               }`}
           >
             ✨ Describe Failure
@@ -98,8 +98,8 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProp
           <button
             onClick={() => setMode('preset')}
             className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${mode === 'preset'
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
               }`}
           >
             📋 Preset Scenarios

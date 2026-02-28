@@ -8,7 +8,7 @@ export interface Network {
 export interface Scenario {
   id: string;
   label: string;
-  category: 'nonconvergence' | 'voltage' | 'thermal' | 'contingency';
+  category: 'normal' | 'nonconvergence' | 'voltage' | 'thermal' | 'contingency';
 }
 
 export interface PipelineResult {
@@ -21,6 +21,7 @@ export interface PipelineResult {
 export interface DiagnoseResponse {
   baseline: PipelineResult;
   agentic: PipelineResult;
+  plotHtml?: string;
 }
 
 export interface GeneratedGroundTruth {
@@ -37,4 +38,5 @@ export interface DiagnoseNLResponse {
   generatedGroundTruth: GeneratedGroundTruth | null;
   baseline: PipelineResult;
   agentic: PipelineResult;
+  plotHtml?: string;
 }

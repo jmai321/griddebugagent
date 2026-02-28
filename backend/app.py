@@ -7,8 +7,10 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
+import pandas as pd
 
 import pandapower as pp
+from pandapower.plotting.plotly import simple_plotly, create_bus_trace, create_line_trace, create_trafo_trace
 
 from openai import OpenAI
 
@@ -17,6 +19,7 @@ from scenarios import (
     VoltageViolationScenarios,
     ThermalOverloadScenarios,
     ContingencyFailureScenarios,
+    NormalScenarios,
 )
 from agents.baseline import BaselineAgent
 from scenarios.nl_scenario_generator import NLScenarioGenerator
@@ -60,9 +63,12 @@ SCENARIO_FACTORIES = {
     "voltage":        VoltageViolationScenarios,
     "thermal":        ThermalOverloadScenarios,
     "contingency":    ContingencyFailureScenarios,
+    "normal":         NormalScenarios,
 }
 
 SCENARIOS = [
+    # Normal Operation
+    {"id": "normal_operation",              "label": "Normal Operation (Baseline)",          "category": "normal"},
     # Non-convergence
     {"id": "extreme_load_scaling",          "label": "Extreme Load Scaling (20×)",           "category": "nonconvergence"},
     {"id": "all_generators_removed",        "label": "All Generators Removed",               "category": "nonconvergence"},
@@ -179,6 +185,93 @@ def _build_pipeline_result(report: str, analysis_status: str = "success") -> dic
     }
 
 
+def _generate_diagnostic_plot(net: pp.pandapowerNet, affected_components: dict) -> str:
+    """
+    Generate an HTML string with a Plotly visualization of the network,
+    highlighting the affected components in red.
+    """
+    try:
+        # Build additional traces for affected components
+        additional_traces = []
+        
+        # Highlight affected buses (including those from loads and gens)
+        buses_to_highlight = set(affected_components.get("bus", []))
+        
+        if "load" in affected_components and affected_components["load"]:
+            for idx in affected_components["load"]:
+                if idx in net.load.index:
+                    buses_to_highlight.add(net.load.at[idx, "bus"])
+                    
+        if "gen" in affected_components and affected_components["gen"]:
+            for idx in affected_components["gen"]:
+                if idx in net.gen.index:
+                    buses_to_highlight.add(net.gen.at[idx, "bus"])
+                    
+        if "sgen" in affected_components and affected_components["sgen"]:
+            for idx in affected_components["sgen"]:
+                if idx in net.sgen.index:
+                    buses_to_highlight.add(net.sgen.at[idx, "bus"])
+
+        if buses_to_highlight:
+            valid_buses = [b for b in buses_to_highlight if b in net.bus.index]
+            if valid_buses:
+                trace_bus = create_bus_trace(
+                    net,
+                    buses=valid_buses,
+                    color="red",
+                    size=25.0,  # Make it large and obvious
+                    trace_name="Affected Buses/Components",
+                    infofunc=pd.Series(index=valid_buses, data=[f"Affected Component at Bus {b}" for b in valid_buses])
+                )
+                additional_traces.extend(trace_bus)
+                
+        # Highlight affected lines
+        if "line" in affected_components and affected_components["line"]:
+            lines_to_highlight = set(affected_components["line"])
+            valid_lines = [l for l in lines_to_highlight if l in net.line.index]
+            if valid_lines:
+                trace_line = create_line_trace(
+                    net,
+                    lines=valid_lines,
+                    color="red",
+                    width=4.0,
+                    trace_name="Affected Lines",
+                    infofunc=pd.Series(index=valid_lines, data=[f"Affected Line {l}" for l in valid_lines])
+                )
+                additional_traces.extend(trace_line)
+
+        # Highlight affected trafos
+        if "trafo" in affected_components and affected_components["trafo"]:
+            trafos_to_highlight = set(affected_components["trafo"])
+            valid_trafos = [t for t in trafos_to_highlight if t in net.trafo.index]
+            if valid_trafos:
+                trace_trafo = create_trafo_trace(
+                    net,
+                    trafos=valid_trafos,
+                    color="red",
+                    width=4.0,
+                    trace_name="Affected Transformers"
+                )
+                additional_traces.extend(trace_trafo)
+
+        # Create the base plot with the additional highlight traces
+        fig = simple_plotly(
+            net,
+            additional_traces=additional_traces,
+            auto_open=False
+        )
+        
+        # Add legend if there are custom traces
+        if additional_traces:
+            fig.update_layout(showlegend=True)
+            
+        return fig.to_html(include_plotlyjs="cdn", full_html=True)
+
+    except Exception as e:
+        print(f"Failed to generate diagnostic plot: {e}")
+        return "<p>Failed to generate visualization.</p>"
+
+
 # ---------------------
 #  Models
 # ---------------------
@@ -194,6 +287,7 @@ class DiagnoseResult(BaseModel):
     """Response body returned by the /diagnose endpoint."""
     baseline: dict
     agentic: dict
+    plotHtml: str = ""
 
 
 class DiagnoseNLRequest(BaseModel):
@@ -314,8 +408,11 @@ def run_diagnose(req: DiagnoseRequest):
         "affectedComponents": [],
         "correctiveActions": [],
     }
+    
+    # Generate visualization
+    plot_html = _generate_diagnostic_plot(net, ground_truth.affected_components)
 
-    return DiagnoseResult(baseline=baseline, agentic=agentic)
+    return DiagnoseResult(baseline=baseline, agentic=agentic, plotHtml=plot_html)
 
 
 # ---------------------
@@ -384,6 +481,9 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         "correctiveActions": [],
     }
 
+    # Generate visualization
+    plot_html = _generate_diagnostic_plot(net, ground_truth.affected_components)
+
     return {
         "generationStatus": "success",
         "generationError": None,
@@ -396,6 +496,7 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         },
         "baseline": baseline,
         "agentic": agentic,
+        "plotHtml": plot_html,
     }
 
 

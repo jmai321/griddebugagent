@@ -10,11 +10,12 @@ import { useState } from 'react';
 interface ResultsPanelProps {
   result: PipelineResult | null;
   nlExtra: DiagnoseNLResponse | null;
+  plotHtml: string | null;
   isLoading: boolean;
   error: string | null;
 }
 
-export function ResultsPanel({ result, nlExtra, isLoading, error }: ResultsPanelProps) {
+export function ResultsPanel({ result, nlExtra, plotHtml, isLoading, error }: ResultsPanelProps) {
   const [codeExpanded, setCodeExpanded] = useState(false);
 
   if (isLoading) {
@@ -63,6 +64,22 @@ export function ResultsPanel({ result, nlExtra, isLoading, error }: ResultsPanel
       </div>
 
       <div className="space-y-6">
+        {plotHtml && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg">Network Visualization</CardTitle>
+              <CardDescription>Interactive plot with affected components highlighted</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0 h-[400px]">
+              <iframe
+                srcDoc={plotHtml}
+                className="w-full h-full border-0 rounded-b-lg"
+                title="Network Visualization"
+                sandbox="allow-scripts"
+              />
+            </CardContent>
+          </Card>
+        )}
         {/* Generated Scenario Card (NL mode only) */}
         {nlExtra && nlExtra.generationStatus === 'success' && (
           <Card className="border-primary/30">

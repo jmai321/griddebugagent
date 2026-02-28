@@ -9,6 +9,7 @@ import { runDiagnosis, runNLDiagnosis } from '@/lib/api';
 export function DiagnosticLayout() {
   const [result, setResult] = useState<PipelineResult | null>(null);
   const [nlExtra, setNlExtra] = useState<DiagnoseNLResponse | null>(null);
+  const [plotHtml, setPlotHtml] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -16,9 +17,11 @@ export function DiagnosticLayout() {
     setIsLoading(true);
     setError(null);
     setNlExtra(null);
+    setPlotHtml(null);
     try {
       const response = await runDiagnosis(network, scenario);
       setResult(response.baseline);
+      setPlotHtml(response.plotHtml ?? null);
     } catch {
       setError('Analysis failed. Please try again.');
       setResult(null);
@@ -31,9 +34,11 @@ export function DiagnosticLayout() {
     setIsLoading(true);
     setError(null);
     setNlExtra(null);
+    setPlotHtml(null);
     try {
       const response = await runNLDiagnosis(network, description);
       setNlExtra(response);
+      setPlotHtml(response.plotHtml ?? null);
       if (response.generationStatus === 'success') {
         setResult(response.baseline);
       } else {
@@ -61,6 +66,7 @@ export function DiagnosticLayout() {
         <ResultsPanel
           result={result}
           nlExtra={nlExtra}
+          plotHtml={plotHtml}
           isLoading={isLoading}
           error={error}
         />

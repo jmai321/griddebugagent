@@ -9,8 +9,12 @@ from pydantic import BaseModel
 import json
 import pandas as pd
 
+import pandas as pd
+from typing import Optional, Dict, List, Any
+
 import pandapower as pp
 from pandapower.plotting.plotly import simple_plotly, create_bus_trace, create_line_trace, create_trafo_trace
+from scenarios.code_sandbox import execute_safely
 
 from openai import OpenAI
 
@@ -256,6 +260,17 @@ def _generate_diagnostic_plot(net: pp.pandapowerNet, affected_components: dict) 
                 )
                 additional_traces.extend(trace_trafo)
 
+        # Draw all generators (gen, sgen, ext_grid) regardless of whether they are affected
+        # This ensures they are always visible on the map.
+        if hasattr(net, 'ext_grid') and not net.ext_grid.empty:
+            additional_traces.extend(create_bus_trace(net, buses=net.ext_grid.bus.tolist(), size=20.0, color="yellow", trace_name="External Grid"))
+            
+        if hasattr(net, 'gen') and not net.gen.empty:
+            additional_traces.extend(create_bus_trace(net, buses=net.gen.bus.tolist(), size=15.0, color="orange", trace_name="Generators"))
+            
+        if hasattr(net, 'sgen') and not net.sgen.empty:
+            additional_traces.extend(create_bus_trace(net, buses=net.sgen.bus.tolist(), size=15.0, color="goldenrod", trace_name="Static Generators"))
+
         # Create the base plot with the additional highlight traces
         fig = simple_plotly(
             net,
@@ -296,6 +311,31 @@ class DiagnoseNLRequest(BaseModel):
     """Request body for the /diagnose_nl endpoint."""
     network: str = "case14"
     description: str
+
+
+class OverrideState(BaseModel):
+    """State of manual network overrides from the frontend control board."""
+    globalLoadScale: float = 1.0  # multiplier for all loads
+    lineOutages: List[int] = []   # list of line indices to set in_service=False
+    trafoOutages: List[int] = []  # list of trafo indices to set in_service=False
+    loadOverrides: Dict[int, Dict[str, float]] = {} # e.g., {idx: {"p_mw": 50.0, "q_mvar": 20.0, "in_service": 1.0/0.0}}
+    genOverrides: Dict[int, Dict[str, float]] = {}  # e.g., {idx: {"p_mw": 100.0, "vm_pu": 1.02, "in_service": 1.0/0.0}}
+
+
+class SimulateOverridesRequest(BaseModel):
+    """Request body for testing manual overrides on an existing scenario."""
+    network: str = "case14"
+    scenario: str
+    generatedCode: Optional[str] = None
+    overrides: OverrideState
+
+
+class NetworkStateRequest(BaseModel):
+    """Request body to fetch the raw components of a network, potentially with NL code."""
+    network: str = "case14"
+    scenario: str
+    generatedCode: Optional[str] = None
+
 
 
 # ---------------------
@@ -347,20 +387,27 @@ def get_visualization(network: str, scenario: str):
 
 
 # ---------------------
-#  GET  /api/network_state
+#  POST /api/network_state
 # ---------------------
 
-@app.get("/api/network_state/{network}/{scenario}")
-def get_network_state(network: str, scenario: str):
+@app.post("/api/network_state")
+def get_network_state(req: NetworkStateRequest):
     """
     Return the raw network components data (buses, lines, generators)
-    for a specific scenario to verify testcases programmatically.
+    for a specific scenario (or generated NLP code).
     """
-    scenario_obj, _ = _find_and_apply_scenario(scenario, network)
+    scenario_obj, _ = _find_and_apply_scenario(req.scenario, req.network)
     net = scenario_obj.net
-    
+
+    # If it's an NLP-generated scenario, we need to apply the generated code
+    if req.generatedCode:
+        execute_safely(req.generatedCode, net, timeout=5)
+
     # Try running power flow to get res_bus and res_line if possible
-    scenario_obj.run_pf()
+    try:
+        pp.runpp(net)
+    except Exception:
+        pass
     
     # Convert DataFrames to dicts, handling NaNs
     return {
@@ -370,6 +417,101 @@ def get_network_state(network: str, scenario: str):
         "gen": json.loads(net.gen.to_json(orient="records")),
         "res_bus": json.loads(net.res_bus.to_json(orient="records")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else [],
         "res_line": json.loads(net.res_line.to_json(orient="records")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else [],
+    }
+
+# ---------------------
+#  POST /api/simulate_overrides
+# ---------------------
+
+@app.post("/api/simulate_overrides")
+def run_simulate_overrides(req: SimulateOverridesRequest):
+    """
+    Apply manual user overrides (sliders/toggles) to a base network scenario,
+    run the power flow, and return the new plot HTML and status.
+    """
+    scenario_obj, _ = _find_and_apply_scenario(req.scenario, req.network)
+    net = scenario_obj.net
+
+    if req.generatedCode:
+        execute_safely(req.generatedCode, net, timeout=5)
+
+    # Apply manual overrides
+    overrides = req.overrides
+
+    # Global scale
+    if overrides.globalLoadScale != 1.0:
+        if not net.load.empty and "p_mw" in net.load.columns:
+            net.load["p_mw"] *= overrides.globalLoadScale
+        if not net.load.empty and "q_mvar" in net.load.columns:
+            net.load["q_mvar"] *= overrides.globalLoadScale
+
+    # Line outages
+    for idx in overrides.lineOutages:
+        if idx in net.line.index:
+            net.line.at[idx, "in_service"] = False
+
+    # Trafo outages
+    for idx in overrides.trafoOutages:
+        if idx in net.trafo.index:
+            net.trafo.at[idx, "in_service"] = False
+
+    # Load overrides
+    for idx_str, values in overrides.loadOverrides.items():
+        idx = int(idx_str)
+        if idx in net.load.index:
+            if "p_mw" in values:
+                net.load.at[idx, "p_mw"] = values["p_mw"]
+            if "q_mvar" in values:
+                net.load.at[idx, "q_mvar"] = values["q_mvar"]
+            if "in_service" in values:
+                net.load.at[idx, "in_service"] = bool(values["in_service"])
+
+    # Gen overrides
+    for idx_str, values in overrides.genOverrides.items():
+        idx = int(idx_str)
+        if idx in net.gen.index:
+            if "p_mw" in values:
+                net.gen.at[idx, "p_mw"] = values["p_mw"]
+            if "vm_pu" in values:
+                net.gen.at[idx, "vm_pu"] = values["vm_pu"]
+            if "in_service" in values:
+                net.gen.at[idx, "in_service"] = bool(values["in_service"])
+
+    # Run power flow
+    converged = False
+    try:
+        pp.runpp(net)
+        converged = getattr(net, "converged", False)
+    except Exception:
+        pass
+
+    # Basic root cause string if it failed
+    root_causes = []
+    affected_components = {}
+    if not converged:
+        root_causes.append("**Non-convergence**: Power flow failed with the current manual overrides.")
+    else:
+        # Quick check for overloads or voltage violations to highlight
+        v_min, v_max = 0.95, 1.05
+        if not net.res_bus.empty:
+            uv = net.res_bus[net.res_bus["vm_pu"] < v_min].index.tolist()
+            ov = net.res_bus[net.res_bus["vm_pu"] > v_max].index.tolist()
+            if uv or ov:
+                root_causes.append("**Voltage Violations**: Buses found outside 0.95–1.05 p.u. bounds.")
+                affected_components["bus"] = uv + ov
+        
+        if not net.res_line.empty:
+            ol = net.res_line[net.res_line["loading_percent"] > 100].index.tolist()
+            if ol:
+                root_causes.append("**Thermal Overloads**: Lines loaded above 100%.")
+                affected_components["line"] = ol
+
+    plot_html = _generate_diagnostic_plot(net, affected_components)
+
+    return {
+        "converged": converged,
+        "plotHtml": plot_html,
+        "rootCauses": root_causes,
     }
 
 
@@ -464,16 +606,67 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
                 "affectedComponents": [],
                 "correctiveActions": [],
             },
+            "responseType": gen_result.get("response_type", "full_diagnosis"),
+            "textAnswer": gen_result.get("text_answer", ""),
+            "agentic": {
+                "analysisStatus": "skipped",
+                "rootCauses": [],
+                "affectedComponents": [],
+                "correctiveActions": [],
+            },
         }
 
     net = gen_result["net"]
     ground_truth = gen_result["ground_truth"]
 
-    # Run power flow
+    response_type = gen_result.get("response_type", "full_diagnosis")
+    text_answer = gen_result.get("text_answer", "")
+
+    # For text-only simple questions, skip power flow and diagnosis
+    if response_type == "text_only":
+        return {
+            "generationStatus": "success",
+            "generationError": None,
+            "generatedCode": gen_result["generated_code"],
+            "generatedGroundTruth": {
+                "failureType": ground_truth.failure_type,
+                "rootCauses": ground_truth.root_causes,
+                "affectedComponents": ground_truth.affected_components,
+                "knownFix": ground_truth.known_fix,
+            },
+            "baseline": {"analysisStatus": "skipped", "rootCauses": [], "affectedComponents": [], "correctiveActions": []},
+            "agentic": {"analysisStatus": "skipped", "rootCauses": [], "affectedComponents": [], "correctiveActions": []},
+            "plotHtml": "",
+            "responseType": response_type,
+            "textAnswer": text_answer,
+        }
+
+    # For plot-only or full-diagnosis, we run power flow and generate the plot
     try:
         pp.runpp(net)
     except Exception:
         pass
+
+    plot_html = _generate_diagnostic_plot(net, ground_truth.affected_components)
+
+    # For plot-only, skip the LLM diagnosis
+    if response_type == "plot_only":
+        return {
+            "generationStatus": "success",
+            "generationError": None,
+            "generatedCode": gen_result["generated_code"],
+            "generatedGroundTruth": {
+                "failureType": ground_truth.failure_type,
+                "rootCauses": ground_truth.root_causes,
+                "affectedComponents": ground_truth.affected_components,
+                "knownFix": ground_truth.known_fix,
+            },
+            "baseline": {"analysisStatus": "skipped", "rootCauses": [], "affectedComponents": [], "correctiveActions": []},
+            "agentic": {"analysisStatus": "skipped", "rootCauses": [], "affectedComponents": [], "correctiveActions": []},
+            "plotHtml": plot_html,
+            "responseType": response_type,
+            "textAnswer": text_answer,
+        }
 
     # --- Baseline pipeline ---
     baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
@@ -483,7 +676,7 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         baseline_status = "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status)
 
-    # --- Agentic pipeline (same as POST /diagnose) ---
+    # --- Agentic pipeline ---
     try:
         agentic_result = _agentic_agent.diagnose(net, network_name=req.network)
         agentic_report = agentic_result["response"]
@@ -499,9 +692,6 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
             "correctiveActions": [],
         }
 
-    # Generate visualization
-    plot_html = _generate_diagnostic_plot(net, ground_truth.affected_components)
-
     return {
         "generationStatus": "success",
         "generationError": None,
@@ -515,6 +705,8 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         "baseline": baseline,
         "agentic": agentic,
         "plotHtml": plot_html,
+        "responseType": response_type,
+        "textAnswer": text_answer,
     }
 
 

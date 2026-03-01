@@ -137,8 +137,8 @@ class DiagnosticTools:
             all_buses = set(G.nodes())
             disconnected = list(all_buses - reachable)
             return {
-                "disconnected_buses": sorted(disconnected),
-                "connected_buses": sorted(reachable),
+                "disconnected_buses": [int(b) for b in sorted(disconnected)],
+                "connected_buses": [int(b) for b in sorted(reachable)],
                 "message": f"{len(disconnected)} bus(es) not connected to slack." if disconnected else "All buses connected.",
             }
         except ImportError:

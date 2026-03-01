@@ -25,6 +25,8 @@ FEW_SHOT_EXAMPLES = [
         "description": "Scale all loads by 20x to cause extreme power mismatch and non-convergence",
         "network": "case14",
         "response": {
+            "response_type": "full_diagnosis",
+            "text_answer": "I will scale all loads by 20x to simulate extreme power mismatch and non-convergence.",
             "mutation_code": "net.load['p_mw'] *= 20.0\nnet.load['q_mvar'] *= 20.0",
             "ground_truth": {
                 "failure_type": "nonconvergence",
@@ -98,6 +100,36 @@ FEW_SHOT_EXAMPLES = [
             }
         }
     },
+    {
+        "description": "What is the voltage on bus 4 in the default case?",
+        "network": "case14",
+        "response": {
+            "response_type": "text_only",
+            "text_answer": "The voltage on Bus 4 in the default IEEE 14-bus network will be calculated and reported.",
+            "mutation_code": "",
+            "ground_truth": {
+                "failure_type": "normal",
+                "root_causes": [],
+                "affected_components": {},
+                "known_fix": ""
+            }
+        }
+    },
+    {
+        "description": "Show me a plot of the network without any failures",
+        "network": "case14",
+        "response": {
+            "response_type": "plot_only",
+            "text_answer": "Here is the interactive visualization of the baseline IEEE 14-bus network.",
+            "mutation_code": "",
+            "ground_truth": {
+                "failure_type": "normal",
+                "root_causes": [],
+                "affected_components": {},
+                "known_fix": ""
+            }
+        }
+    },
 ]
 
 # ── System prompt ──────────────────────────────────────────────────
@@ -129,11 +161,13 @@ pandapower DataFrames: `net.bus`, `net.line`, `net.load`, `net.gen`, \
 - Keep code concise and focused on the mutation.
 
 ## Output Format
-You MUST respond with valid JSON (no markdown fences) in this exact format:
+You MUST respond with valid JSON (no markdown fences) in this exact format. Set `response_type` to `text_only` for simple questions, `plot_only` for simple plot requests, or `full_diagnosis` if the user wants to simulate a failure and diagnose it.
 {{
-  "mutation_code": "<Python code as a single string with newlines>",
+  "response_type": "<text_only|plot_only|full_diagnosis>",
+  "text_answer": "<Brief explanation or answer to the user's question. For text_only, this can be the final response.>",
+  "mutation_code": "<Python code as a single string with newlines. Leave empty if no mutation needed.>",
   "ground_truth": {{
-    "failure_type": "<nonconvergence|voltage|thermal|contingency>",
+    "failure_type": "<normal|nonconvergence|voltage|thermal|contingency>",
     "root_causes": ["cause 1", "cause 2"],
     "affected_components": {{"<element_type>": ["<indices or description>"]}},
     "known_fix": "<description of corrective action>"
@@ -212,22 +246,30 @@ class NLScenarioGenerator:
                 "generated_code": "",
                 "generation_status": "error",
                 "error": f"Failed to parse LLM response: {llm_response[:500]}",
+                "response_type": "full_diagnosis",
+                "text_answer": "",
             }
 
-        mutation_code = parsed["mutation_code"]
-        ground_truth_raw = parsed["ground_truth"]
+        mutation_code = parsed.get("mutation_code", "")
+        ground_truth_raw = parsed.get("ground_truth", {})
+        response_type = parsed.get("response_type", "full_diagnosis")
+        text_answer = parsed.get("text_answer", "")
 
-        # Step 4: Execute the mutation code safely
-        exec_result = execute_safely(mutation_code, net_copy, timeout=5)
+        # Step 4: Execute the mutation code safely (if any)
+        if mutation_code.strip():
+            exec_result = execute_safely(mutation_code, net_copy, timeout=5)
 
-        if not exec_result["success"]:
-            return {
-                "net": net,
-                "ground_truth": None,
-                "generated_code": mutation_code,
-                "generation_status": "error",
-                "error": exec_result["error"],
-            }
+            if not exec_result["success"]:
+                return {
+                    "net": net,
+                    "ground_truth": None,
+                    "generated_code": mutation_code,
+                    "generation_status": "error",
+                    "error": exec_result["error"],
+                    "response_type": response_type,
+                    "text_answer": text_answer,
+                }
+            net = exec_result["net"]
 
         # Step 5: Build ScenarioResult from ground truth
         affected = ground_truth_raw.get("affected_components", {})
@@ -255,11 +297,13 @@ class NLScenarioGenerator:
         )
 
         return {
-            "net": exec_result["net"],
+            "net": net,
             "ground_truth": ground_truth,
             "generated_code": mutation_code,
             "generation_status": "success",
             "error": None,
+            "response_type": response_type,
+            "text_answer": text_answer,
         }
 
     def _call_llm(self, description: str, network_name: str) -> str:
@@ -309,6 +353,8 @@ class NLScenarioGenerator:
         except Exception as e:
             return json.dumps({
                 "error": f"LLM call failed: {str(e)}",
+                "response_type": "full_diagnosis",
+                "text_answer": "",
                 "mutation_code": "",
                 "ground_truth": {
                     "failure_type": "unknown",

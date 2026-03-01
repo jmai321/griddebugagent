@@ -41,4 +41,60 @@ export interface DiagnoseNLResponse {
   baseline: PipelineResult;
   agentic: PipelineResult;
   plotHtml?: string;
+  responseType: 'text_only' | 'plot_only' | 'full_diagnosis';
+  textAnswer?: string;
 }
+
+// Network Manipulation Types
+export interface OverrideState {
+  globalLoadScale: number;
+  lineOutages: number[];
+  trafoOutages: number[];
+  loadOverrides: Record<number, { p_mw?: number; q_mvar?: number; in_service?: boolean }>;
+  genOverrides: Record<number, { p_mw?: number; vm_pu?: number; in_service?: boolean }>;
+}
+
+export interface BusData {
+  name: string;
+  vn_kv: number;
+  type: string;
+  in_service: boolean;
+  [key: string]: any;
+}
+
+export interface LineData {
+  name: string;
+  from_bus: number;
+  to_bus: number;
+  length_km: number;
+  in_service: boolean;
+  [key: string]: any;
+}
+
+export interface LoadData {
+  name: string;
+  bus: number;
+  p_mw: number;
+  q_mvar: number;
+  in_service: boolean;
+  [key: string]: any;
+}
+
+export interface GenData {
+  name: string;
+  bus: number;
+  p_mw: number;
+  vm_pu: number;
+  in_service: boolean;
+  [key: string]: any;
+}
+
+export interface RawNetworkState {
+  bus: Record<string, BusData>;
+  line: Record<string, LineData>;
+  load: Record<string, LoadData>;
+  gen: Record<string, GenData>;
+  res_bus?: any[];
+  res_line?: any[];
+}
+

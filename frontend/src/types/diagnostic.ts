@@ -8,42 +8,37 @@ export interface Network {
 export interface Scenario {
   id: string;
   label: string;
-  category: 'nonconvergence' | 'voltage' | 'thermal' | 'contingency';
+  category: 'normal' | 'nonconvergence' | 'voltage' | 'thermal' | 'contingency';
 }
 
 export interface PipelineResult {
-  analysisStatus: 'success' | 'error' | 'not_implemented';
+  analysisStatus: 'success' | 'error' | 'not_implemented' | 'skipped';
   rootCauses: string[];
   affectedComponents: string[];
   correctiveActions: string[];
 }
 
+export type PipelineId = 'baseline' | 'agentic';
+
 export interface DiagnoseResponse {
   baseline: PipelineResult;
   agentic: PipelineResult;
+  plotHtml?: string;
 }
 
-// Topology graph (nodes = buses, edges = lines/trafos)
-export interface TopologyNode {
-  id: string;
-  busId: number;
-  label: string;
-  x: number;
-  y: number;
-  in_service: boolean;
+export interface GeneratedGroundTruth {
+  failureType: string;
+  rootCauses: string[];
+  affectedComponents: Record<string, unknown>;
+  knownFix: string;
 }
 
-export interface TopologyEdge {
-  id: string;
-  source: string;
-  target: string;
-  type: 'line' | 'trafo';
-  lineIndex?: number;
-  trafoIndex?: number;
-  in_service: boolean;
-}
-
-export interface TopologyResponse {
-  nodes: TopologyNode[];
-  edges: TopologyEdge[];
+export interface DiagnoseNLResponse {
+  generationStatus: 'success' | 'error';
+  generationError: string | null;
+  generatedCode: string;
+  generatedGroundTruth: GeneratedGroundTruth | null;
+  baseline: PipelineResult;
+  agentic: PipelineResult;
+  plotHtml?: string;
 }

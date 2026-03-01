@@ -5,4 +5,4 @@ pandapower
 openai
 python-dotenv
 numba
-networkx
+matplotlib

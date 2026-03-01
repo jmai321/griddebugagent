@@ -1,52 +1,56 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { InputPanel } from './input-panel';
 import { ResultsPanel } from './results-panel';
-import { GridGraph } from './grid-graph';
-import { PipelineResult, TopologyResponse } from '@/types/diagnostic';
-import { runDiagnosis, fetchTopology } from '@/lib/api';
+import { PipelineResult, PipelineId, DiagnoseNLResponse } from '@/types/diagnostic';
+import { runDiagnosis, runNLDiagnosis } from '@/lib/api';
 
 export function DiagnosticLayout() {
-  const [result, setResult] = useState<PipelineResult | null>(null);
+  const [fullResponse, setFullResponse] = useState<{ baseline: PipelineResult; agentic: PipelineResult; plotHtml?: string } | null>(null);
+  const [selectedPipeline, setSelectedPipeline] = useState<PipelineId>('baseline');
+  const [nlExtra, setNlExtra] = useState<DiagnoseNLResponse | null>(null);
+  const [plotHtml, setPlotHtml] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedNetwork, setSelectedNetwork] = useState<string>('');
-  const [selectedScenario, setSelectedScenario] = useState<string>('');
-  const [topology, setTopology] = useState<TopologyResponse | null>(null);
-  const [topologyLoading, setTopologyLoading] = useState(false);
 
-  useEffect(() => {
-    if (!selectedNetwork) {
-      setTopology(null);
-      return;
-    }
-    let cancelled = false;
-    setTopologyLoading(true);
-    fetchTopology(selectedNetwork, selectedScenario || undefined)
-      .then((data) => {
-        if (!cancelled) setTopology(data);
-      })
-      .catch(() => {
-        if (!cancelled) setTopology(null);
-      })
-      .finally(() => {
-        if (!cancelled) setTopologyLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedNetwork, selectedScenario]);
+  const result: PipelineResult | null = fullResponse ? fullResponse[selectedPipeline] : null;
 
   const handleAnalyze = async (network: string, scenario: string) => {
     setIsLoading(true);
     setError(null);
+    setNlExtra(null);
+    setPlotHtml(null);
     try {
       const response = await runDiagnosis(network, scenario);
-      setResult(response.baseline);
+      setFullResponse({ baseline: response.baseline, agentic: response.agentic, plotHtml: response.plotHtml });
+      setPlotHtml(response.plotHtml ?? null);
     } catch {
       setError('Analysis failed. Please try again.');
-      setResult(null);
+      setFullResponse(null);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAnalyzeNL = async (network: string, description: string) => {
+    setIsLoading(true);
+    setError(null);
+    setNlExtra(null);
+    setPlotHtml(null);
+    try {
+      const response = await runNLDiagnosis(network, description);
+      setNlExtra(response);
+      setPlotHtml(response.plotHtml ?? null);
+      if (response.generationStatus === 'success') {
+        setFullResponse({ baseline: response.baseline, agentic: response.agentic, plotHtml: response.plotHtml });
+      } else {
+        setError(response.generationError || 'Failed to generate scenario');
+        setFullResponse(null);
+      }
+    } catch {
+      setError('NL Analysis failed. Please try again.');
+      setFullResponse(null);
     } finally {
       setIsLoading(false);
     }
@@ -54,23 +58,24 @@ export function DiagnosticLayout() {
 
   return (
     <div className="flex h-screen bg-background">
-      <div className="w-1/2 border-r border-border flex flex-col min-w-0">
-        <div className="flex-shrink-0 overflow-y-auto">
-          <InputPanel
-            onAnalyze={handleAnalyze}
-            isLoading={isLoading}
-            selectedNetwork={selectedNetwork}
-            selectedScenario={selectedScenario}
-            onNetworkChange={setSelectedNetwork}
-            onScenarioChange={setSelectedScenario}
-          />
-        </div>
-        <div className="flex-1 min-h-[280px] border-t border-border">
-          <GridGraph topology={topology} isLoading={topologyLoading} className="h-full w-full" />
-        </div>
+      <div className="w-1/2 border-r border-border">
+        <InputPanel
+          onAnalyze={handleAnalyze}
+          onAnalyzeNL={handleAnalyzeNL}
+          isLoading={isLoading}
+          selectedPipeline={selectedPipeline}
+          onPipelineChange={setSelectedPipeline}
+        />
       </div>
-      <div className="w-1/2 min-w-0">
-        <ResultsPanel result={result} isLoading={isLoading} error={error} />
+      <div className="w-1/2">
+        <ResultsPanel
+          result={result}
+          selectedPipeline={selectedPipeline}
+          nlExtra={nlExtra}
+          plotHtml={plotHtml}
+          isLoading={isLoading}
+          error={error}
+        />
       </div>
     </div>
   );

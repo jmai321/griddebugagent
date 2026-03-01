@@ -3,8 +3,14 @@ import re
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import json
+import pandas as pd
+
+import pandapower as pp
+from pandapower.plotting.plotly import simple_plotly, create_bus_trace, create_line_trace, create_trafo_trace
 
 from openai import OpenAI
 
@@ -13,16 +19,11 @@ from scenarios import (
     VoltageViolationScenarios,
     ThermalOverloadScenarios,
     ContingencyFailureScenarios,
+    NormalScenarios,
 )
-from scenarios.base_scenarios import load_network
 from agents.baseline import BaselineAgent
-
-try:
-    from pandapower.topology import create_nxgraph
-    import networkx as nx
-    _HAS_NX = True
-except ImportError:
-    _HAS_NX = False
+from agents.agentic_pipeline import AgenticPipelineAgent
+from scenarios.nl_scenario_generator import NLScenarioGenerator
 
 load_dotenv()
 
@@ -45,6 +46,8 @@ app.add_middleware(
 _openai_key = os.getenv("OPENAI_API_KEY", "")
 _llm_client = OpenAI(api_key=_openai_key) if _openai_key else None
 _baseline_agent = BaselineAgent(llm_client=_llm_client)
+_agentic_agent = AgenticPipelineAgent(llm_client=_llm_client)
+_nl_generator = NLScenarioGenerator(llm_client=_llm_client)
 
 
 # ---------------------
@@ -62,9 +65,12 @@ SCENARIO_FACTORIES = {
     "voltage":        VoltageViolationScenarios,
     "thermal":        ThermalOverloadScenarios,
     "contingency":    ContingencyFailureScenarios,
+    "normal":         NormalScenarios,
 }
 
 SCENARIOS = [
+    # Normal Operation
+    {"id": "normal_operation",              "label": "Normal Operation (Baseline)",          "category": "normal"},
     # Non-convergence
     {"id": "extreme_load_scaling",          "label": "Extreme Load Scaling (20×)",           "category": "nonconvergence"},
     {"id": "all_generators_removed",        "label": "All Generators Removed",               "category": "nonconvergence"},
@@ -106,81 +112,6 @@ def _find_and_apply_scenario(scenario_id: str, network: str):
             return sc, result
 
     raise HTTPException(404, f"Scenario '{scenario_id}' not found in factory")
-
-
-def _get_network_for_topology(network: str, scenario: str | None):
-    """Return pandapower net for topology: base network or with scenario applied."""
-    if scenario:
-        scenario_obj, _ = _find_and_apply_scenario(scenario, network)
-        return scenario_obj.net
-    return load_network(network)
-
-
-def _build_topology(net) -> dict:
-    """
-    Build nodes (buses) and edges (lines + trafos) with positions for frontend graph.
-    Uses net.bus_geodata if present, else networkx spring_layout.
-    """
-    nodes = []
-    bus_ids = list(net.bus.index)
-    in_service = net.bus["in_service"].to_dict()
-
-    # Resolve (x, y) for each bus
-    positions = {}
-    if hasattr(net, "bus_geodata") and net.bus_geodata is not None and len(net.bus_geodata) > 0:
-        for bus_id in bus_ids:
-            if bus_id in net.bus_geodata.index:
-                row = net.bus_geodata.loc[bus_id]
-                x = float(row.get("x", 0))
-                y = float(row.get("y", 0))
-                positions[bus_id] = (x, y)
-    if len(positions) < len(bus_ids):
-        if _HAS_NX:
-            G = create_nxgraph(net, respect_switches=False)
-            pos = nx.spring_layout(G, seed=42, k=1.5)
-            for bus_id in bus_ids:
-                if bus_id in pos:
-                    positions[bus_id] = (float(pos[bus_id][0]), float(pos[bus_id][1]))
-        else:
-            # Fallback: place buses in a circle
-            import math
-            n = len(bus_ids)
-            for i, bus_id in enumerate(bus_ids):
-                angle = 2 * math.pi * i / n if n else 0
-                positions[bus_id] = (math.cos(angle), math.sin(angle))
-    for bus_id in bus_ids:
-        x, y = positions.get(bus_id, (0.0, 0.0))
-        name = net.bus.at[bus_id, "name"] if "name" in net.bus.columns else f"Bus {bus_id}"
-        nodes.append({
-            "id": str(bus_id),
-            "busId": int(bus_id),
-            "label": str(name),
-            "x": round(x, 4),
-            "y": round(y, 4),
-            "in_service": bool(in_service.get(bus_id, True)),
-        })
-
-    edges = []
-    for idx, row in net.line.iterrows():
-        edges.append({
-            "id": f"line-{idx}",
-            "source": str(int(row["from_bus"])),
-            "target": str(int(row["to_bus"])),
-            "type": "line",
-            "lineIndex": int(idx),
-            "in_service": bool(row.get("in_service", True)),
-        })
-    for idx, row in net.trafo.iterrows():
-        edges.append({
-            "id": f"trafo-{idx}",
-            "source": str(int(row["hv_bus"])),
-            "target": str(int(row["lv_bus"])),
-            "type": "trafo",
-            "trafoIndex": int(idx),
-            "in_service": bool(row.get("in_service", True)),
-        })
-
-    return {"nodes": nodes, "edges": edges}
 
 
 def _parse_llm_report(report: str) -> dict:
@@ -256,6 +187,93 @@ def _build_pipeline_result(report: str, analysis_status: str = "success") -> dic
     }
 
 
+def _generate_diagnostic_plot(net: pp.pandapowerNet, affected_components: dict) -> str:
+    """
+    Generate an HTML string with a Plotly visualization of the network,
+    highlighting the affected components in red.
+    """
+    try:
+        # Build additional traces for affected components
+        additional_traces = []
+        
+        # Highlight affected buses (including those from loads and gens)
+        buses_to_highlight = set(affected_components.get("bus", []))
+        
+        if "load" in affected_components and affected_components["load"]:
+            for idx in affected_components["load"]:
+                if idx in net.load.index:
+                    buses_to_highlight.add(net.load.at[idx, "bus"])
+                    
+        if "gen" in affected_components and affected_components["gen"]:
+            for idx in affected_components["gen"]:
+                if idx in net.gen.index:
+                    buses_to_highlight.add(net.gen.at[idx, "bus"])
+                    
+        if "sgen" in affected_components and affected_components["sgen"]:
+            for idx in affected_components["sgen"]:
+                if idx in net.sgen.index:
+                    buses_to_highlight.add(net.sgen.at[idx, "bus"])
+
+        if buses_to_highlight:
+            valid_buses = [b for b in buses_to_highlight if b in net.bus.index]
+            if valid_buses:
+                trace_bus = create_bus_trace(
+                    net,
+                    buses=valid_buses,
+                    color="red",
+                    size=25.0,  # Make it large and obvious
+                    trace_name="Affected Buses/Components",
+                    infofunc=pd.Series(index=valid_buses, data=[f"Affected Component at Bus {b}" for b in valid_buses])
+                )
+                additional_traces.extend(trace_bus)
+                
+        # Highlight affected lines
+        if "line" in affected_components and affected_components["line"]:
+            lines_to_highlight = set(affected_components["line"])
+            valid_lines = [l for l in lines_to_highlight if l in net.line.index]
+            if valid_lines:
+                trace_line = create_line_trace(
+                    net,
+                    lines=valid_lines,
+                    color="red",
+                    width=4.0,
+                    trace_name="Affected Lines",
+                    infofunc=pd.Series(index=valid_lines, data=[f"Affected Line {l}" for l in valid_lines])
+                )
+                additional_traces.extend(trace_line)
+
+        # Highlight affected trafos
+        if "trafo" in affected_components and affected_components["trafo"]:
+            trafos_to_highlight = set(affected_components["trafo"])
+            valid_trafos = [t for t in trafos_to_highlight if t in net.trafo.index]
+            if valid_trafos:
+                trace_trafo = create_trafo_trace(
+                    net,
+                    trafos=valid_trafos,
+                    color="red",
+                    width=4.0,
+                    trace_name="Affected Transformers"
+                )
+                additional_traces.extend(trace_trafo)
+
+        # Create the base plot with the additional highlight traces
+        fig = simple_plotly(
+            net,
+            additional_traces=additional_traces,
+            auto_open=False
+        )
+        
+        # Add legend if there are custom traces
+        if additional_traces:
+            fig.update_layout(showlegend=True)
+            
+        return fig.to_html(include_plotlyjs="cdn", full_html=True)
+
+    except Exception as e:
+        print(f"Failed to generate diagnostic plot: {e}")
+        return "<p>Failed to generate visualization.</p>"
+
+
 # ---------------------
 #  Models
 # ---------------------
@@ -271,6 +289,13 @@ class DiagnoseResult(BaseModel):
     """Response body returned by the /diagnose endpoint."""
     baseline: dict
     agentic: dict
+    plotHtml: str = ""
+
+
+class DiagnoseNLRequest(BaseModel):
+    """Request body for the /diagnose_nl endpoint."""
+    network: str = "case14"
+    description: str
 
 
 # ---------------------
@@ -293,25 +318,59 @@ def get_scenarios():
     return {"scenarios": SCENARIOS}
 
 
+
 # ---------------------
-#  GET  /topology
+#  GET  /api/visualize
 # ---------------------
 
-@app.get("/topology")
-def get_topology(network: str = "case14", scenario: str | None = None):
+@app.get("/api/visualize/{network}/{scenario}", response_class=HTMLResponse)
+def get_visualization(network: str, scenario: str):
     """
-    Return network topology for graph visualization: nodes (buses) and edges (lines, trafos)
-    with coordinates. Optional query param scenario applies that scenario before returning topology.
+    Generate an interactive Plotly HTML visualization of the power network
+    for a given scenario to verify testcases visually.
     """
-    valid_networks = [n["id"] for n in NETWORKS]
-    if network not in valid_networks:
-        raise HTTPException(400, f"Unknown network: {network}. Choose from {valid_networks}")
-    if scenario is not None:
-        entry = next((s for s in SCENARIOS if s["id"] == scenario), None)
-        if entry is None:
-            raise HTTPException(404, f"Unknown scenario: {scenario}")
-    net = _get_network_for_topology(network, scenario)
-    return _build_topology(net)
+    try:
+        from pandapower.plotting.plotly import simple_plotly
+    except ImportError:
+        return HTMLResponse("Plotly is not installed. Run `pip install plotly matplotlib`", status_code=500)
+    
+    # Apply the scenario to get a modified network
+    scenario_obj, _ = _find_and_apply_scenario(scenario, network)
+    net = scenario_obj.net
+    
+    try:
+        fig = simple_plotly(net)
+        html_content = fig.to_html(include_plotlyjs="cdn", full_html=True)
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        return HTMLResponse(content=f"Error generating plot: {e}", status_code=500)
+
+
+# ---------------------
+#  GET  /api/network_state
+# ---------------------
+
+@app.get("/api/network_state/{network}/{scenario}")
+def get_network_state(network: str, scenario: str):
+    """
+    Return the raw network components data (buses, lines, generators)
+    for a specific scenario to verify testcases programmatically.
+    """
+    scenario_obj, _ = _find_and_apply_scenario(scenario, network)
+    net = scenario_obj.net
+    
+    # Try running power flow to get res_bus and res_line if possible
+    scenario_obj.run_pf()
+    
+    # Convert DataFrames to dicts, handling NaNs
+    return {
+        "bus": json.loads(net.bus.to_json(orient="records")),
+        "line": json.loads(net.line.to_json(orient="records")),
+        "load": json.loads(net.load.to_json(orient="records")),
+        "gen": json.loads(net.gen.to_json(orient="records")),
+        "res_bus": json.loads(net.res_bus.to_json(orient="records")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else [],
+        "res_line": json.loads(net.res_line.to_json(orient="records")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else [],
+    }
 
 
 # ---------------------
@@ -344,15 +403,119 @@ def run_diagnose(req: DiagnoseRequest):
         baseline_status = "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status)
 
-    # --- Agentic pipeline (stub until implemented) ---
-    agentic = {
-        "analysisStatus": "not_implemented",
-        "rootCauses": [],
-        "affectedComponents": [],
-        "correctiveActions": [],
-    }
+    # --- Agentic pipeline (with tools) ---
+    try:
+        agentic_result = _agentic_agent.diagnose(net, network_name=req.network)
+        agentic_report = agentic_result["response"]
+        agentic_status = "success"
+        if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
+            agentic_status = "error"
+        agentic = _build_pipeline_result(agentic_report, agentic_status)
+    except Exception as e:
+        agentic = {
+            "analysisStatus": "error",
+            "rootCauses": [],
+            "affectedComponents": [],
+            "correctiveActions": [],
+        }
 
-    return DiagnoseResult(baseline=baseline, agentic=agentic)
+    # Generate visualization
+    plot_html = _generate_diagnostic_plot(net, ground_truth.affected_components)
+
+    return DiagnoseResult(baseline=baseline, agentic=agentic, plotHtml=plot_html)
+
+
+# ---------------------
+#  POST /diagnose_nl
+# ---------------------
+
+@app.post("/diagnose_nl")
+def run_diagnose_nl(req: DiagnoseNLRequest):
+    """
+    Generate a failure scenario from a natural language description,
+    then run it through the diagnosis pipelines.
+    """
+    # Validate network
+    valid_networks = [n["id"] for n in NETWORKS]
+    if req.network not in valid_networks:
+        raise HTTPException(400, f"Unknown network: {req.network}. Choose from {valid_networks}")
+
+    # Generate the scenario from NL
+    gen_result = _nl_generator.generate(
+        description=req.description,
+        network_name=req.network,
+    )
+
+    if gen_result["generation_status"] != "success":
+        return {
+            "generationStatus": "error",
+            "generationError": gen_result["error"],
+            "generatedCode": gen_result.get("generated_code", ""),
+            "generatedGroundTruth": None,
+            "baseline": {
+                "analysisStatus": "skipped",
+                "rootCauses": [],
+                "affectedComponents": [],
+                "correctiveActions": [],
+            },
+            "agentic": {
+                "analysisStatus": "skipped",
+                "rootCauses": [],
+                "affectedComponents": [],
+                "correctiveActions": [],
+            },
+        }
+
+    net = gen_result["net"]
+    ground_truth = gen_result["ground_truth"]
+
+    # Run power flow
+    try:
+        pp.runpp(net)
+    except Exception:
+        pass
+
+    # --- Baseline pipeline ---
+    baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
+    baseline_report = baseline_result["response"]
+    baseline_status = "success"
+    if baseline_report.startswith("LLM call failed"):
+        baseline_status = "error"
+    baseline = _build_pipeline_result(baseline_report, baseline_status)
+
+    # --- Agentic pipeline (same as POST /diagnose) ---
+    try:
+        agentic_result = _agentic_agent.diagnose(net, network_name=req.network)
+        agentic_report = agentic_result["response"]
+        agentic_status = "success"
+        if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
+            agentic_status = "error"
+        agentic = _build_pipeline_result(agentic_report, agentic_status)
+    except Exception:
+        agentic = {
+            "analysisStatus": "error",
+            "rootCauses": [],
+            "affectedComponents": [],
+            "correctiveActions": [],
+        }
+
+    # Generate visualization
+    plot_html = _generate_diagnostic_plot(net, ground_truth.affected_components)
+
+    return {
+        "generationStatus": "success",
+        "generationError": None,
+        "generatedCode": gen_result["generated_code"],
+        "generatedGroundTruth": {
+            "failureType": ground_truth.failure_type,
+            "rootCauses": ground_truth.root_causes,
+            "affectedComponents": ground_truth.affected_components,
+            "knownFix": ground_truth.known_fix,
+        },
+        "baseline": baseline,
+        "agentic": agentic,
+        "plotHtml": plot_html,
+    }
 
 
 # ---------------------

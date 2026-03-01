@@ -2,17 +2,28 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { PipelineResult } from '@/types/diagnostic';
-import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb } from 'lucide-react';
+import { PipelineResult, PipelineId, DiagnoseNLResponse } from '@/types/diagnostic';
+import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { useState } from 'react';
+
+const PIPELINE_LABELS: Record<PipelineId, string> = {
+  baseline: 'Baseline (LLM only)',
+  agentic: 'Agentic (with tools)',
+};
 
 interface ResultsPanelProps {
   result: PipelineResult | null;
+  selectedPipeline: PipelineId;
+  nlExtra: DiagnoseNLResponse | null;
+  plotHtml: string | null;
   isLoading: boolean;
   error: string | null;
 }
 
-export function ResultsPanel({ result, isLoading, error }: ResultsPanelProps) {
+export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml, isLoading, error }: ResultsPanelProps) {
+  const [codeExpanded, setCodeExpanded] = useState(false);
+
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-6" role="status" aria-label="Loading">
@@ -47,18 +58,102 @@ export function ResultsPanel({ result, isLoading, error }: ResultsPanelProps) {
   return (
     <div className="flex flex-col h-full p-6 overflow-y-auto">
       <div className="mb-6">
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
           <h2 className="text-xl font-semibold">Diagnostic Results</h2>
-          <Badge
-            className={`flex items-center gap-1 ${result.analysisStatus === 'success' ? 'bg-success text-white' : 'bg-destructive text-white'}`}
-          >
-            <CheckCircle2 className="h-3 w-3" />
-            {result.analysisStatus}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="font-normal">
+              {PIPELINE_LABELS[selectedPipeline]}
+            </Badge>
+            <Badge
+              className={`flex items-center gap-1 ${result.analysisStatus === 'success' ? 'bg-success text-white' : result.analysisStatus === 'not_implemented' ? 'bg-muted text-muted-foreground' : 'bg-destructive text-white'}`}
+            >
+              <CheckCircle2 className="h-3 w-3" />
+              {result.analysisStatus}
+            </Badge>
+          </div>
         </div>
       </div>
 
       <div className="space-y-6">
+        {plotHtml && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg">Network Visualization</CardTitle>
+              <CardDescription>Interactive plot with affected components highlighted</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0 h-[400px]">
+              <iframe
+                srcDoc={plotHtml}
+                className="w-full h-full border-0 rounded-b-lg"
+                title="Network Visualization"
+                sandbox="allow-scripts"
+              />
+            </CardContent>
+          </Card>
+        )}
+        {/* Generated Scenario Card (NL mode only) */}
+        {nlExtra && nlExtra.generationStatus === 'success' && (
+          <Card className="border-primary/30">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Code2 className="h-5 w-5 text-primary" />
+                Generated Scenario
+              </CardTitle>
+              <CardDescription>
+                LLM-generated failure: {nlExtra.generatedGroundTruth?.failureType ?? 'unknown'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {nlExtra.generatedGroundTruth && (
+                <div className="text-sm space-y-1">
+                  <p className="font-medium">Expected root causes:</p>
+                  <ul className="list-disc list-inside text-muted-foreground">
+                    {nlExtra.generatedGroundTruth.rootCauses.map((c, i) => (
+                      <li key={i}>{c}</li>
+                    ))}
+                  </ul>
+                  <p className="text-muted-foreground mt-2">
+                    <span className="font-medium text-foreground">Known fix:</span>{' '}
+                    {nlExtra.generatedGroundTruth.knownFix}
+                  </p>
+                </div>
+              )}
+              <button
+                onClick={() => setCodeExpanded(!codeExpanded)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {codeExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                {codeExpanded ? 'Hide' : 'Show'} mutation code
+              </button>
+              {codeExpanded && (
+                <pre className="p-3 rounded-md bg-muted/50 text-xs font-mono overflow-x-auto whitespace-pre-wrap">
+                  {nlExtra.generatedCode}
+                </pre>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Generation Error Card */}
+        {nlExtra && nlExtra.generationStatus === 'error' && (
+          <Card className="border-destructive/30">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2 text-destructive">
+                <AlertCircle className="h-5 w-5" />
+                Scenario Generation Failed
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">{nlExtra.generationError}</p>
+              {nlExtra.generatedCode && (
+                <pre className="mt-3 p-3 rounded-md bg-muted/50 text-xs font-mono overflow-x-auto whitespace-pre-wrap">
+                  {nlExtra.generatedCode}
+                </pre>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">

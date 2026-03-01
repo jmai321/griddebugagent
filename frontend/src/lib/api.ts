@@ -1,4 +1,4 @@
-import { Network, Scenario, DiagnoseResponse, TopologyResponse } from '@/types/diagnostic';
+import { Network, Scenario, DiagnoseResponse, DiagnoseNLResponse } from '@/types/diagnostic';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -26,10 +26,12 @@ export async function runDiagnosis(network: string, scenario: string): Promise<D
   return res.json();
 }
 
-export async function fetchTopology(network: string, scenario?: string | null): Promise<TopologyResponse> {
-  const params = new URLSearchParams({ network });
-  if (scenario) params.set('scenario', scenario);
-  const res = await fetch(`${API_BASE}/topology?${params.toString()}`);
-  if (!res.ok) throw new Error('Failed to fetch topology');
+export async function runNLDiagnosis(network: string, description: string): Promise<DiagnoseNLResponse> {
+  const res = await fetch(`${API_BASE}/diagnose_nl`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ network, description }),
+  });
+  if (!res.ok) throw new Error('NL Diagnosis request failed');
   return res.json();
 }

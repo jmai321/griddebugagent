@@ -271,9 +271,17 @@ def _generate_diagnostic_plot(net: pp.pandapowerNet, affected_components: dict) 
         if hasattr(net, 'sgen') and not net.sgen.empty:
             additional_traces.extend(create_bus_trace(net, buses=net.sgen.bus.tolist(), size=15.0, color="goldenrod", trace_name="Static Generators"))
 
+        # Create a deep copy of the network to temporarily modify bus names for plotting
+        import copy
+        plot_net = copy.deepcopy(net)
+        
+        # Override the 'name' column of buses to explicitly equal the DataFrame index as a string
+        # simple_plotly relies on the 'name' column by default to render hover text
+        plot_net.bus['name'] = [f"{idx}" for idx in plot_net.bus.index]
+
         # Create the base plot with the additional highlight traces
         fig = simple_plotly(
-            net,
+            plot_net,
             additional_traces=additional_traces,
             auto_open=False
         )
@@ -491,14 +499,19 @@ def run_simulate_overrides(req: SimulateOverridesRequest):
     if not converged:
         root_causes.append("**Non-convergence**: Power flow failed with the current manual overrides.")
     else:
-        # Quick check for overloads or voltage violations to highlight
-        v_min, v_max = 0.95, 1.05
+        v_min_global, v_max_global = 0.95, 1.05
         if not net.res_bus.empty:
-            uv = net.res_bus[net.res_bus["vm_pu"] < v_min].index.tolist()
-            ov = net.res_bus[net.res_bus["vm_pu"] > v_max].index.tolist()
-            if uv or ov:
-                root_causes.append("**Voltage Violations**: Buses found outside 0.95–1.05 p.u. bounds.")
-                affected_components["bus"] = uv + ov
+            has_voltage_issues = False
+            for idx, row in net.res_bus.iterrows():
+                b_min = net.bus.at[idx, "min_vm_pu"] if "min_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "min_vm_pu"]) else v_min_global
+                b_max = net.bus.at[idx, "max_vm_pu"] if "max_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "max_vm_pu"]) else v_max_global
+                
+                if row["vm_pu"] < b_min or row["vm_pu"] > b_max:
+                    has_voltage_issues = True
+                    affected_components.setdefault("bus", []).append(int(idx))
+            
+            if has_voltage_issues:
+                root_causes.append("**Voltage Violations**: Buses found outside their specific voltage bounds.")
         
         if not net.res_line.empty:
             ol = net.res_line[net.res_line["loading_percent"] > 100].index.tolist()

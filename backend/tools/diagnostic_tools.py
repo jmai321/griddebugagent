@@ -102,19 +102,27 @@ class DiagnosticTools:
         v_max: float | None = None,
         **kwargs,
     ) -> dict:
-        v_min = _safe_float(v_min if v_min is not None else kwargs.get("v_min", 0.95))
-        v_max = _safe_float(v_max if v_max is not None else kwargs.get("v_max", 1.05))
+        global_v_min = _safe_float(v_min if v_min is not None else kwargs.get("v_min", 0.95))
+        global_v_max = _safe_float(v_max if v_max is not None else kwargs.get("v_max", 1.05))
         undervoltage = []
         overvoltage = []
         if getattr(net, "converged", False) and hasattr(net, "res_bus") and not net.res_bus.empty:
             res = net.res_bus
-            for idx, row in res[res["vm_pu"] < v_min].iterrows():
-                undervoltage.append({"bus": int(idx), "vm_pu": round(_safe_float(row["vm_pu"]), 4)})
-            for idx, row in res[res["vm_pu"] > v_max].iterrows():
-                overvoltage.append({"bus": int(idx), "vm_pu": round(_safe_float(row["vm_pu"]), 4)})
+            bus_df = net.bus
+            for idx, row in res.iterrows():
+                vm_pu = round(_safe_float(row["vm_pu"]), 4)
+                
+                # Use bus-specific limits if available, otherwise global defaults
+                bus_v_min = bus_df.at[idx, "min_vm_pu"] if "min_vm_pu" in bus_df.columns and pd.notna(bus_df.at[idx, "min_vm_pu"]) else global_v_min
+                bus_v_max = bus_df.at[idx, "max_vm_pu"] if "max_vm_pu" in bus_df.columns and pd.notna(bus_df.at[idx, "max_vm_pu"]) else global_v_max
+                
+                if vm_pu < bus_v_min:
+                    undervoltage.append({"bus": int(idx), "vm_pu": vm_pu, "limit": bus_v_min})
+                elif vm_pu > bus_v_max:
+                    overvoltage.append({"bus": int(idx), "vm_pu": vm_pu, "limit": bus_v_max})
         return {
-            "v_min_pu": v_min,
-            "v_max_pu": v_max,
+            "v_min_pu_global": global_v_min,
+            "v_max_pu_global": global_v_max,
             "undervoltage_buses": undervoltage,
             "overvoltage_buses": overvoltage,
             "total_violations": len(undervoltage) + len(overvoltage),

@@ -52,6 +52,7 @@ export interface OverrideState {
   trafoOutages: number[];
   loadOverrides: Record<number, { p_mw?: number; q_mvar?: number; in_service?: boolean }>;
   genOverrides: Record<number, { p_mw?: number; vm_pu?: number; in_service?: boolean }>;
+  extGridOverrides: Record<number, { vm_pu?: number; in_service?: boolean }>;
 }
 
 export interface BusData {
@@ -89,11 +90,29 @@ export interface GenData {
   [key: string]: any;
 }
 
+export interface TrafoData {
+  name: string;
+  hv_bus: number;
+  lv_bus: number;
+  in_service: boolean;
+  [key: string]: any;
+}
+
+export interface ExtGridData {
+  name: string;
+  bus: number;
+  vm_pu: number;
+  in_service: boolean;
+  [key: string]: any;
+}
+
 export interface RawNetworkState {
   bus: Record<string, BusData>;
   line: Record<string, LineData>;
   load: Record<string, LoadData>;
   gen: Record<string, GenData>;
+  trafo: Record<string, TrafoData>;
+  ext_grid: Record<string, ExtGridData>;
   res_bus?: any[];
   res_line?: any[];
 }

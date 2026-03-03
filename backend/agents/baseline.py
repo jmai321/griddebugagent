@@ -37,6 +37,8 @@ When the power flow CONVERGED but has violations:
 
 ## Output Format
 
+If a specific USER QUERY is provided, your primary goal is to answer that query. You must still adhere to the Root Causes / Affected Components / Corrective Actions markdown format below, but adapt the content of those sections to serve as the direct answer to the user's question. If no user query is provided, diagnose the most prominent network flaws.
+
 Format your response as a structured diagnostic report:
 ## Root Causes
 (Rank from most to least likely. Be specific — cite numbers from the evidence.)
@@ -52,6 +54,8 @@ The following power flow simulation has {status}.
 
 Network: {network_name}
 Buses: {bus_count} | Lines: {line_count} | Generators: {gen_count} | Loads: {load_count}
+
+{user_query_str}
 
 {evidence_text}
 
@@ -74,7 +78,7 @@ class BaselineAgent:
         self.llm_client = llm_client
         self.collector = EvidenceCollector()
 
-    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown") -> dict[str, Any]:
+    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown", user_query: str = "") -> dict[str, Any]:
         """
         Run baseline diagnosis on a network.
 
@@ -90,6 +94,7 @@ class BaselineAgent:
 
         # Build prompt
         status = "FAILED TO CONVERGE" if not report.converged else "CONVERGED"
+        user_query_str = f"== USER QUERY ==\n{user_query}\n" if user_query else ""
         prompt = USER_PROMPT_TEMPLATE.format(
             status=status,
             network_name=network_name,
@@ -97,6 +102,7 @@ class BaselineAgent:
             line_count=report.line_count,
             gen_count=report.gen_count,
             load_count=len(net.load),
+            user_query_str=user_query_str,
             evidence_text=report.to_text(),
         )
 

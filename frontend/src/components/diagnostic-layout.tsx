@@ -11,6 +11,8 @@ export function DiagnosticLayout() {
   const [selectedPipeline, setSelectedPipeline] = useState<PipelineId>('baseline');
   const [nlExtra, setNlExtra] = useState<DiagnoseNLResponse | null>(null);
   const [plotHtml, setPlotHtml] = useState<string | null>(null);
+  const [currentNetwork, setCurrentNetwork] = useState<string | null>(null);
+  const [currentScenario, setCurrentScenario] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,6 +23,8 @@ export function DiagnosticLayout() {
     setError(null);
     setNlExtra(null);
     setPlotHtml(null);
+    setCurrentNetwork(network);
+    setCurrentScenario(scenario);
     try {
       const response = await runDiagnosis(network, scenario);
       setFullResponse({ baseline: response.baseline, agentic: response.agentic, plotHtml: response.plotHtml });
@@ -38,6 +42,8 @@ export function DiagnosticLayout() {
     setError(null);
     setNlExtra(null);
     setPlotHtml(null);
+    setCurrentNetwork(network);
+    setCurrentScenario('nl_generated');
     try {
       const response = await runNLDiagnosis(network, description);
       setNlExtra(response);
@@ -75,6 +81,8 @@ export function DiagnosticLayout() {
           plotHtml={plotHtml}
           isLoading={isLoading}
           error={error}
+          networkName={currentNetwork}
+          scenarioName={currentScenario}
         />
       </div>
     </div>

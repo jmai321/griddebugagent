@@ -58,11 +58,32 @@ _nl_generator = NLScenarioGenerator(llm_client=_llm_client)
 #  Constants
 # ---------------------
 
-NETWORKS = [
-    {"id": "case14", "label": "IEEE 14-Bus"},
-    {"id": "case30", "label": "IEEE 30-Bus"},
-    {"id": "case57", "label": "IEEE 57-Bus"},
-]
+import inspect
+import pandapower.networks as nw
+
+def _get_available_networks() -> list[dict]:
+    networks = []
+    common_cases = ["case14", "case30", "case57", "case118", "case300"]
+    
+    # Priority defaults
+    for name in common_cases:
+        if hasattr(nw, name):
+            networks.append({"id": name, "label": f"IEEE {name.replace('case', '')}-Bus"})
+        
+    # Add the rest of the zero-arg functions from pandapower.networks
+    for name, obj in inspect.getmembers(nw):
+        if inspect.isfunction(obj) and not name.startswith('_') and name not in common_cases:
+            sig = inspect.signature(obj)
+            has_required = any(
+                p.default == inspect.Parameter.empty 
+                and p.kind in [inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.POSITIONAL_ONLY]
+                for p in sig.parameters.values()
+            )
+            if not has_required:
+                networks.append({"id": name, "label": name})
+    return networks
+
+NETWORKS = _get_available_networks()
 
 SCENARIO_FACTORIES = {
     "nonconvergence": NonConvergenceScenarios,
@@ -328,6 +349,7 @@ class OverrideState(BaseModel):
     trafoOutages: List[int] = []  # list of trafo indices to set in_service=False
     loadOverrides: Dict[int, Dict[str, float]] = {} # e.g., {idx: {"p_mw": 50.0, "q_mvar": 20.0, "in_service": 1.0/0.0}}
     genOverrides: Dict[int, Dict[str, float]] = {}  # e.g., {idx: {"p_mw": 100.0, "vm_pu": 1.02, "in_service": 1.0/0.0}}
+    extGridOverrides: Dict[int, Dict[str, float]] = {} # e.g., {idx: {"vm_pu": 1.02, "in_service": 1.0/0.0}}
 
 
 class SimulateOverridesRequest(BaseModel):
@@ -421,8 +443,10 @@ def get_network_state(req: NetworkStateRequest):
     return {
         "bus": json.loads(net.bus.to_json(orient="records")),
         "line": json.loads(net.line.to_json(orient="records")),
-        "load": json.loads(net.load.to_json(orient="records")),
-        "gen": json.loads(net.gen.to_json(orient="records")),
+        "load": json.loads(net.load.to_json(orient="records")) if getattr(net, "load", None) is not None and not net.load.empty else [],
+        "gen": json.loads(net.gen.to_json(orient="records")) if getattr(net, "gen", None) is not None and not net.gen.empty else [],
+        "trafo": json.loads(net.trafo.to_json(orient="records")) if getattr(net, "trafo", None) is not None and not net.trafo.empty else [],
+        "ext_grid": json.loads(net.ext_grid.to_json(orient="records")) if getattr(net, "ext_grid", None) is not None and not net.ext_grid.empty else [],
         "res_bus": json.loads(net.res_bus.to_json(orient="records")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else [],
         "res_line": json.loads(net.res_line.to_json(orient="records")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else [],
     }
@@ -462,6 +486,13 @@ def run_simulate_overrides(req: SimulateOverridesRequest):
     for idx in overrides.trafoOutages:
         if idx in net.trafo.index:
             net.trafo.at[idx, "in_service"] = False
+
+    # Ext grid overrides
+    for idx_str, values in overrides.extGridOverrides.items():
+        idx = int(idx_str)
+        if getattr(net, "ext_grid", None) is not None and idx in net.ext_grid.index:
+            for k, v in values.items():
+                net.ext_grid.at[idx, k] = v
 
     # Load overrides
     for idx_str, values in overrides.loadOverrides.items():
@@ -528,6 +559,34 @@ def run_simulate_overrides(req: SimulateOverridesRequest):
     }
 
 
+def _get_combined_affected_components(net: pp.pandapowerNet, base_components: dict = None) -> dict:
+    """Merge predefined affected components with dynamically found violations."""
+    import copy
+    combined = copy.deepcopy(base_components) if base_components else {}
+    
+    # Try to find voltage violations
+    v_min_global, v_max_global = 0.95, 1.05
+    if getattr(net, "res_bus", None) is not None and not net.res_bus.empty:
+        for idx, row in net.res_bus.iterrows():
+            b_min = net.bus.at[idx, "min_vm_pu"] if "min_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "min_vm_pu"]) else v_min_global
+            b_max = net.bus.at[idx, "max_vm_pu"] if "max_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "max_vm_pu"]) else v_max_global
+            
+            if row["vm_pu"] < b_min or row["vm_pu"] > b_max:
+                combined.setdefault("bus", []).append(int(idx))
+                
+    if "bus" in combined:
+        combined["bus"] = list(set(combined["bus"]))
+        
+    # Try to find thermal overloads
+    if getattr(net, "res_line", None) is not None and not net.res_line.empty:
+        ol = net.res_line[net.res_line["loading_percent"] > 100].index.tolist()
+        if ol:
+            combined.setdefault("line", []).extend(ol)
+            combined["line"] = list(set(combined["line"]))
+            
+    return combined
+
+
 # ---------------------
 #  POST /diagnose
 # ---------------------
@@ -566,6 +625,8 @@ def run_diagnose(req: DiagnoseRequest):
         if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
             agentic_status = "error"
         agentic = _build_pipeline_result(agentic_report, agentic_status)
+        agentic["tool_calls"] = agentic_result.get("tool_calls", [])
+        agentic["conversation"] = agentic_result.get("conversation", [])
     except Exception as e:
         agentic = {
             "analysisStatus": "error",
@@ -575,7 +636,8 @@ def run_diagnose(req: DiagnoseRequest):
         }
 
     # Generate visualization
-    plot_html = _generate_diagnostic_plot(net, ground_truth.affected_components)
+    combined_components = _get_combined_affected_components(net, ground_truth.affected_components)
+    plot_html = _generate_diagnostic_plot(net, combined_components)
 
     return DiagnoseResult(baseline=baseline, agentic=agentic, plotHtml=plot_html)
 
@@ -660,7 +722,8 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
     except Exception:
         pass
 
-    plot_html = _generate_diagnostic_plot(net, ground_truth.affected_components)
+    combined_components = _get_combined_affected_components(net, ground_truth.affected_components)
+    plot_html = _generate_diagnostic_plot(net, combined_components)
 
     # For plot-only, skip the LLM diagnosis
     if response_type == "plot_only":
@@ -682,7 +745,7 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         }
 
     # --- Baseline pipeline ---
-    baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
+    baseline_result = _baseline_agent.diagnose(net, network_name=req.network, user_query=req.description)
     baseline_report = baseline_result["response"]
     baseline_status = "success"
     if baseline_report.startswith("LLM call failed"):
@@ -691,12 +754,14 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
 
     # --- Agentic pipeline ---
     try:
-        agentic_result = _agentic_agent.diagnose(net, network_name=req.network)
+        agentic_result = _agentic_agent.diagnose(net, network_name=req.network, user_query=req.description)
         agentic_report = agentic_result["response"]
         agentic_status = "success"
         if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
             agentic_status = "error"
         agentic = _build_pipeline_result(agentic_report, agentic_status)
+        agentic["tool_calls"] = agentic_result.get("tool_calls", [])
+        agentic["conversation"] = agentic_result.get("conversation", [])
     except Exception:
         agentic = {
             "analysisStatus": "error",

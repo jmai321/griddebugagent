@@ -45,6 +45,8 @@ then check contingency impacts.
 
 ## Output Requirements
 
+If a specific USER QUERY is provided, your primary goal is to answer that query using your tools. You must still adhere to the Root Causes / Affected Components / Corrective Actions markdown format, but adapt the content of those sections to serve as the answer to the user's question. If no user query is provided, diagnose the most prominent network flaws.
+
 When done analyzing, output "FINAL REPORT:" followed by:
 ## Root Causes (ranked, with specific numbers from evidence)
 ## Affected Components (type + specific indices, e.g. "Load 0-41", "Bus 3")
@@ -55,6 +57,7 @@ When done analyzing, output "FINAL REPORT:" followed by:
 USER_PROMPT_TEMPLATE = """\
 == NETWORK: {network_name} ==
 == FAILURE CATEGORY: {failure_category} ==
+{user_query_str}
 
 {evidence_text}
 
@@ -80,7 +83,7 @@ class AgenticPipelineAgent:
         self.llm_client = llm_client
         self.preprocessor = Preprocessor()
 
-    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown") -> dict[str, Any]:
+    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown", user_query: str = "") -> dict[str, Any]:
         """
         Run agentic diagnosis with tool access.
 
@@ -95,9 +98,11 @@ class AgenticPipelineAgent:
         rules_text = self._format_rules(context["triggered_rules"])
         network_summary = json.dumps(context["network_summary"], indent=2)
 
+        user_query_str = f"== USER QUERY ==\n{user_query}\n" if user_query else ""
         user_prompt = USER_PROMPT_TEMPLATE.format(
             network_name=network_name,
             failure_category=context["failure_category"],
+            user_query_str=user_query_str,
             evidence_text=context["evidence_text"],
             rules_text=rules_text,
             network_summary=network_summary,

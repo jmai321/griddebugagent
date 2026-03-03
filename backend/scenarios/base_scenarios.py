@@ -32,18 +32,21 @@ class ScenarioResult:
 
 # ── Network loader ─────────────────────────────────────────────────
 
-NETWORK_LOADERS = {
-    "case14": pn.case14,
-    "case30": pn.case30,
-    "case57": pn.case57,
-}
-
+import inspect
 
 def load_network(name: str) -> pp.pandapowerNet:
-    """Load a fresh copy of a standard IEEE test network."""
-    if name not in NETWORK_LOADERS:
-        raise ValueError(f"Unknown network: {name}. Choose from {list(NETWORK_LOADERS)}")
-    return NETWORK_LOADERS[name]()
+    """Load a fresh copy of a test network from pandapower.networks."""
+    if not hasattr(pn, name):
+        raise ValueError(f"Unknown network: {name}. Not found in pandapower.networks.")
+        
+    func = getattr(pn, name)
+    if not inspect.isfunction(func):
+        raise ValueError(f"Unknown network: {name}. Not a function in pandapower.networks.")
+        
+    try:
+        return func()
+    except Exception as e:
+        raise ValueError(f"Network {name} could not be loaded dynamically: {e}")
 
 
 # ── Abstract scenario ──────────────────────────────────────────────

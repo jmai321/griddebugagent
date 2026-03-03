@@ -21,9 +21,11 @@ interface ResultsPanelProps {
   plotHtml: string | null;
   isLoading: boolean;
   error: string | null;
+  networkName: string | null;
+  scenarioName: string | null;
 }
 
-export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: initialPlotHtml, isLoading, error }: ResultsPanelProps) {
+export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: initialPlotHtml, isLoading, error, networkName, scenarioName }: ResultsPanelProps) {
   const [codeExpanded, setCodeExpanded] = useState(false);
   const [plotHtml, setPlotHtml] = useState<string | null>(initialPlotHtml);
   const [networkState, setNetworkState] = useState<RawNetworkState | null>(null);
@@ -49,8 +51,8 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            network: 'case14', // Fallback, would be better to pass as prop
-            scenario: 'normal_operation', // Fallback
+            network: networkName || 'case14',
+            scenario: scenarioName || 'normal_operation',
             generatedCode: nlExtra?.generatedCode || null
           })
         });
@@ -76,8 +78,8 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          network: 'case14', // Fallback
-          scenario: 'normal_operation', // Fallback
+          network: networkName || 'case14',
+          scenario: scenarioName || 'normal_operation',
           generatedCode: nlExtra?.generatedCode || null,
           overrides
         })

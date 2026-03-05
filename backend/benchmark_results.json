@@ -1,0 +1,104 @@
+{
+  "results": [
+    {
+      "query_id": "Q1",
+      "network": "case39",
+      "scenario": "normal_operation",
+      "query": "Load the IEEE-39 bus system. What are the connected buses for line 11? What are ",
+      "our_agent_ok": true,
+      "reason": "Reported",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q2",
+      "network": "case14",
+      "scenario": "normal_operation",
+      "query": "In ERCOT operations, what is the maximum delay allowed for under-frequency relay",
+      "our_agent_ok": true,
+      "reason": "Reported",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q3",
+      "network": "case39",
+      "scenario": "normal_operation",
+      "query": "For the IEEE 39-bus system, what is the shortest path between bus 1 and bus 10?",
+      "our_agent_ok": true,
+      "reason": "Reported",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q4",
+      "network": "case39",
+      "scenario": "normal_operation",
+      "query": "Run AC power flow on the IEEE 39-bus system using the fast-decoupled method. Sho",
+      "our_agent_ok": true,
+      "reason": "Ran power flow and reported",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q5",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "Run DC OPF on the Texas 2k grid and return the optimal generation profile and to",
+      "our_agent_ok": true,
+      "reason": "Reported",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q6",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "For the IEEE 118-bus system, perform an N-1 contingency analysis to evaluate the",
+      "our_agent_ok": true,
+      "reason": "Ran contingency and reported",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q7",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "For the Texas 2k grid, show me the network topology.",
+      "our_agent_ok": true,
+      "reason": "Reported",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q8",
+      "network": "case300",
+      "scenario": "normal_operation",
+      "query": "For the IEEE 300-bus system, suppose that there is a three-phase fault at bus 35",
+      "our_agent_ok": true,
+      "reason": "Reported",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q9",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "Can you run AC power flow on the IEEE 118-bus grid to find the top 5 most heavil",
+      "our_agent_ok": true,
+      "reason": "Reported (flow tools optional if preprocessor already ran)",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q10",
+      "network": "case39",
+      "scenario": "normal_operation",
+      "query": "For the IEEE 39-bus system, consider three scenarios: Scenario 1 is the base cas",
+      "our_agent_ok": true,
+      "reason": "Reported",
+      "paper_agent": ""
+    },
+    {
+      "query_id": "Q11",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "From the ERCOT Operating Guide, what are the normal operational voltage limits f",
+      "our_agent_ok": true,
+      "reason": "Reported",
+      "paper_agent": ""
+    }
+  ],
+  "default_network": "case14"
+}

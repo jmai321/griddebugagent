@@ -18,7 +18,7 @@ export function DiagnosticLayout() {
 
   const result: PipelineResult | null = fullResponse ? fullResponse[selectedPipeline] : null;
 
-  const handleAnalyze = async (network: string, scenario: string) => {
+  const handleAnalyze = async (network: string, scenario: string, query?: string) => {
     setIsLoading(true);
     setError(null);
     setNlExtra(null);
@@ -26,7 +26,7 @@ export function DiagnosticLayout() {
     setCurrentNetwork(network);
     setCurrentScenario(scenario);
     try {
-      const response = await runDiagnosis(network, scenario);
+      const response = await runDiagnosis(network, scenario, query);
       setFullResponse({ baseline: response.baseline, agentic: response.agentic, plotHtml: response.plotHtml });
       setPlotHtml(response.plotHtml ?? null);
     } catch {

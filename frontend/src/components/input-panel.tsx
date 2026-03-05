@@ -15,7 +15,7 @@ const PIPELINE_OPTIONS: { id: PipelineId; label: string }[] = [
 ];
 
 interface InputPanelProps {
-  onAnalyze: (network: string, scenario: string) => void;
+  onAnalyze: (network: string, scenario: string, query?: string) => void;
   onAnalyzeNL: (network: string, description: string) => void;
   isLoading: boolean;
   selectedPipeline: PipelineId;
@@ -38,6 +38,7 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [mode, setMode] = useState<InputMode>('nl');
   const [nlDescription, setNlDescription] = useState<string>('');
+  const [presetQuery, setPresetQuery] = useState<string>(''); // optional benchmark/user query for preset mode
 
   useEffect(() => {
     async function loadData() {
@@ -59,7 +60,7 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline
   const handleAnalyze = () => {
     if (mode === 'preset') {
       if (selectedNetwork && selectedScenario) {
-        onAnalyze(selectedNetwork, selectedScenario);
+        onAnalyze(selectedNetwork, selectedScenario, presetQuery.trim() || undefined);
       }
     } else {
       if (selectedNetwork && nlDescription.trim()) {
@@ -194,6 +195,21 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline
                   Category: {selectedScenarioData.category}
                 </div>
               )}
+
+              <div>
+                <label className="text-sm font-medium text-muted-foreground block mb-1">
+                  Optional: Benchmark / user query
+                </label>
+                <textarea
+                  className="w-full min-h-[60px] p-2 rounded-md border border-input bg-background text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                  placeholder="e.g. Find top 5 heavily loaded lines; Run contingency analysis..."
+                  value={presetQuery}
+                  onChange={(e) => setPresetQuery(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Used for paper benchmark or task-focused evaluation (run power flow, find overloads, etc.)
+                </p>
+              </div>
             </CardContent>
           </Card>
         )}

@@ -200,15 +200,125 @@ def _parse_llm_report(report: str) -> dict:
 
 def _build_pipeline_result(report: str, analysis_status: str = "success") -> dict:
     """Build pipeline result with analysisStatus and parsed fields."""
-    print('========================================')
-    print(report)
-    print('========================================')
     parsed = _parse_llm_report(report)
     return {
         "analysisStatus": analysis_status,
         "rootCauses": parsed["rootCauses"],
         "affectedComponents": parsed["affectedComponents"],
         "correctiveActions": parsed["correctiveActions"],
+    }
+
+
+def _format_reasoning_trace(tool_calls: list, final_report_snippet: str | None = None, max_result_len: int = 400) -> str:
+    """Build a human-readable full reasoning trace for the agentic pipeline."""
+    lines = [
+        "=== Agentic reasoning trace ===",
+        "Input: evidence text + triggered rules + failure_category (from Preprocessor).",
+        "",
+    ]
+    for i, tc in enumerate(tool_calls, 1):
+        tool = tc.get("tool", "?")
+        args = tc.get("args") or {}
+        result = tc.get("result")
+        it = tc.get("iteration", i - 1)
+        args_str = json.dumps(args, default=str) if args else ""
+        if isinstance(result, dict):
+            result_str = json.dumps(result, default=str)
+        else:
+            result_str = str(result)
+        if len(result_str) > max_result_len:
+            result_str = result_str[:max_result_len] + "..."
+        lines.append(f"Step {i} (iteration {it}): Called {tool}({args_str})")
+        lines.append(f"  → result: {result_str}")
+        lines.append("")
+    lines.append("Final step: Produced FINAL REPORT (parsed into root causes, affected components, corrective actions).")
+    if final_report_snippet:
+        snippet = (final_report_snippet[:800] + "...") if len(final_report_snippet) > 800 else final_report_snippet
+        lines.append("")
+        lines.append("--- Report snippet ---")
+        lines.append(snippet)
+    return "\n".join(lines)
+
+
+def _evaluate_reasoning_quality(
+    tool_calls: list,
+    root_causes: list,
+    affected_components: list,
+    corrective_actions: list,
+) -> dict:
+    """
+    Heuristic checks: does the agent's tool usage support what it claimed in the report?
+    Returns { "checks": [ {"id", "passed", "message"} ], "summary": "x/y passed" }.
+    """
+    report_text = " ".join(root_causes + affected_components + corrective_actions).lower()
+    tools_used = [tc.get("tool", "") for tc in tool_calls]
+    checks = []
+
+    # 1. Agent used at least one tool (gathered evidence)
+    used_tools = len(tool_calls) > 0
+    checks.append({
+        "id": "used_tools",
+        "passed": used_tools,
+        "message": "Agent called at least one tool to gather evidence." if used_tools else "Agent produced report without calling any tools (no tool-based evidence).",
+    })
+
+    # 2. If report mentions overload/loading/thermal → expect relevant tools
+    overload_keywords = ["overload", "loading", "thermal", "line loading", "congestion"]
+    mentions_overload = any(k in report_text for k in overload_keywords)
+    overload_tools = ["check_overloads", "get_loading_profile", "run_full_diagnostics", "run_power_flow", "run_dc_power_flow"]
+    has_overload_evidence = any(t in tools_used for t in overload_tools)
+    if mentions_overload:
+        checks.append({
+            "id": "evidence_for_overload",
+            "passed": has_overload_evidence,
+            "message": "Report mentions overload/loading; agent used overload/flow/diagnostic tools." if has_overload_evidence else "Report mentions overload/loading but agent did not call overload or power-flow tools.",
+        })
+
+    # 3. If report mentions voltage → expect voltage-related tools
+    voltage_keywords = ["voltage", "vm_pu", "violation", "undervoltage", "overvoltage"]
+    mentions_voltage = any(k in report_text for k in voltage_keywords)
+    voltage_tools = ["check_voltage_violations", "get_voltage_profile"]
+    has_voltage_evidence = any(t in tools_used for t in voltage_tools)
+    if mentions_voltage:
+        checks.append({
+            "id": "evidence_for_voltage",
+            "passed": has_voltage_evidence,
+            "message": "Report mentions voltage; agent used voltage-related tools." if has_voltage_evidence else "Report mentions voltage but agent did not call voltage tools.",
+        })
+
+    # 4. If report mentions balance/generation/load/convergence → expect balance or flow tools
+    balance_keywords = ["balance", "generation", "load", "convergence", "imbalance", "gen", "demand"]
+    mentions_balance = any(k in report_text for k in balance_keywords)
+    balance_tools = ["get_power_balance", "get_network_summary", "run_power_flow", "run_full_diagnostics"]
+    has_balance_evidence = any(t in tools_used for t in balance_tools)
+    if mentions_balance:
+        checks.append({
+            "id": "evidence_for_balance",
+            "passed": has_balance_evidence,
+            "message": "Report mentions balance/load/gen; agent used balance or flow tools." if has_balance_evidence else "Report mentions balance/load/gen but agent did not call power-balance or flow tools.",
+        })
+
+    # 5. Diagnostic order: power flow before overload/voltage checks (if those were used)
+    flow_tools = ["run_power_flow", "run_dc_power_flow", "run_full_diagnostics"]
+    diag_tools = ["check_overloads", "check_voltage_violations"]
+    flow_indices = [i for i, t in enumerate(tools_used) if t in flow_tools]
+    diag_indices = [i for i, t in enumerate(tools_used) if t in diag_tools]
+    order_ok = True
+    if diag_indices and flow_indices:
+        order_ok = min(flow_indices) < max(diag_indices)
+    checks.append({
+        "id": "reasonable_order",
+        "passed": order_ok,
+        "message": "Power flow / full diagnostics ran before overload/voltage checks (data before diagnosis)." if order_ok else "Overload/voltage checks ran but no prior power-flow/diagnostics call; consider running flow first.",
+    })
+
+    passed = sum(1 for c in checks if c["passed"])
+    total = len(checks)
+    return {
+        "checks": checks,
+        "summary": f"{passed}/{total} checks passed",
+        "passedCount": passed,
+        "totalCount": total,
     }
 
 
@@ -327,6 +437,7 @@ class DiagnoseRequest(BaseModel):
     network: str = "case14"
     scenario: str
     pipeline: str = "baseline"              # "baseline" or "agentic"
+    query: Optional[str] = None             # optional user/benchmark query (e.g. paper queries)
 
 
 class DiagnoseResult(BaseModel):
@@ -609,8 +720,10 @@ def run_diagnose(req: DiagnoseRequest):
     # Attempt power flow
     scenario_obj.run_pf()
 
+    user_query = (req.query or "").strip() or ""
+
     # --- Baseline pipeline ---
-    baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
+    baseline_result = _baseline_agent.diagnose(net, network_name=req.network, user_query=user_query)
     baseline_report = baseline_result["response"]
     baseline_status = "success"
     if baseline_report.startswith("LLM call failed"):
@@ -619,20 +732,32 @@ def run_diagnose(req: DiagnoseRequest):
 
     # --- Agentic pipeline (with tools) ---
     try:
-        agentic_result = _agentic_agent.diagnose(net, network_name=req.network)
+        agentic_result = _agentic_agent.diagnose(net, network_name=req.network, user_query=user_query)
         agentic_report = agentic_result["response"]
         agentic_status = "success"
         if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
             agentic_status = "error"
         agentic = _build_pipeline_result(agentic_report, agentic_status)
-        agentic["tool_calls"] = agentic_result.get("tool_calls", [])
-        agentic["conversation"] = agentic_result.get("conversation", [])
+        tool_calls = agentic_result.get("tool_calls", [])
+        agentic["toolCalls"] = tool_calls
+        reasoning_trace = _format_reasoning_trace(tool_calls, agentic_report)
+        agentic["reasoningTrace"] = reasoning_trace
+        agentic["reasoningQuality"] = _evaluate_reasoning_quality(
+            tool_calls,
+            agentic.get("rootCauses", []),
+            agentic.get("affectedComponents", []),
+            agentic.get("correctiveActions", []),
+        )
+        print("\n" + reasoning_trace + "\n")
     except Exception as e:
         agentic = {
             "analysisStatus": "error",
             "rootCauses": [],
             "affectedComponents": [],
             "correctiveActions": [],
+            "toolCalls": [],
+            "reasoningTrace": f"Agent failed: {e}",
+            "reasoningQuality": {"checks": [], "summary": "N/A (agent failed)", "passedCount": 0, "totalCount": 0},
         }
 
     # Generate visualization
@@ -760,14 +885,26 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
             agentic_status = "error"
         agentic = _build_pipeline_result(agentic_report, agentic_status)
-        agentic["tool_calls"] = agentic_result.get("tool_calls", [])
-        agentic["conversation"] = agentic_result.get("conversation", [])
+        tool_calls = agentic_result.get("tool_calls", [])
+        agentic["toolCalls"] = tool_calls
+        reasoning_trace_nl = _format_reasoning_trace(tool_calls, agentic_report)
+        agentic["reasoningTrace"] = reasoning_trace_nl
+        agentic["reasoningQuality"] = _evaluate_reasoning_quality(
+            tool_calls,
+            agentic.get("rootCauses", []),
+            agentic.get("affectedComponents", []),
+            agentic.get("correctiveActions", []),
+        )
+        print("\n[diagnose_nl] Agentic reasoning trace:\n" + reasoning_trace_nl + "\n")
     except Exception:
         agentic = {
             "analysisStatus": "error",
             "rootCauses": [],
             "affectedComponents": [],
             "correctiveActions": [],
+            "toolCalls": [],
+            "reasoningTrace": "Agent failed.",
+            "reasoningQuality": {"checks": [], "summary": "N/A (agent failed)", "passedCount": 0, "totalCount": 0},
         }
 
     return {

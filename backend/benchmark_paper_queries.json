@@ -1,0 +1,84 @@
+{
+  "description": "Paper benchmark: 11 user queries for task-completion evaluation (Grid dataset retrieval, Documentation, Topology, Power flow, OPF, Contingency, Visualization, Short-circuit, Complex multi-step).",
+  "network": "case14",
+  "scenarios": ["normal_operation"],
+  "queries": [
+    {
+      "id": "Q1",
+      "type": "Grid dataset retrieval",
+      "network": "case39",
+      "scenario": "normal_operation",
+      "query": "Load the IEEE-39 bus system. What are the connected buses for line 11? What are the voltage limits of bus 3?"
+    },
+    {
+      "id": "Q2",
+      "type": "Documentation retrieval",
+      "network": "case14",
+      "scenario": "normal_operation",
+      "query": "In ERCOT operations, what is the maximum delay allowed for under-frequency relays serving load resources?"
+    },
+    {
+      "id": "Q3",
+      "type": "Topology",
+      "network": "case39",
+      "scenario": "normal_operation",
+      "query": "For the IEEE 39-bus system, what is the shortest path between bus 1 and bus 10?"
+    },
+    {
+      "id": "Q4",
+      "type": "Power flow analysis",
+      "network": "case39",
+      "scenario": "normal_operation",
+      "query": "Run AC power flow on the IEEE 39-bus system using the fast-decoupled method. Show me the convergence result, the total active power loss, and the active power flow value of line 11."
+    },
+    {
+      "id": "Q5",
+      "type": "Optimal Power Flow",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "Run DC OPF on the Texas 2k grid and return the optimal generation profile and total cost."
+    },
+    {
+      "id": "Q6",
+      "type": "Contingency",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "For the IEEE 118-bus system, perform an N-1 contingency analysis to evaluate the impact of disconnecting line 171. Summarize the limits violation."
+    },
+    {
+      "id": "Q7",
+      "type": "Visualization",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "For the Texas 2k grid, show me the network topology."
+    },
+    {
+      "id": "Q8",
+      "type": "Short-circuit analysis",
+      "network": "case300",
+      "scenario": "normal_operation",
+      "query": "For the IEEE 300-bus system, suppose that there is a three-phase fault at bus 35, what are the maximal short-circuit currents? Summarize the results."
+    },
+    {
+      "id": "Q9",
+      "type": "Complex multi-step query",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "Can you run AC power flow on the IEEE 118-bus grid to find the top 5 most heavily loaded lines, then run contingency analysis on those and summarize any operational limit violations?"
+    },
+    {
+      "id": "Q10",
+      "type": "Complex multi-step query",
+      "network": "case39",
+      "scenario": "normal_operation",
+      "query": "For the IEEE 39-bus system, consider three scenarios: Scenario 1 is the base case, Scenario 2 takes line 11 out of service, and Scenario 3 doubles all loads. Run OPF for each scenario, and compare and summarize the total generation cost and the generation outputs of generators 1, 2, and 3 across the scenarios."
+    },
+    {
+      "id": "Q11",
+      "type": "Complex multi-step query",
+      "network": "case118",
+      "scenario": "normal_operation",
+      "query": "From the ERCOT Operating Guide, what are the normal operational voltage limits for buses with a nominal voltage of 138 kV? Convert these voltage limits to per-unit values based on the nominal voltage, set those as Vmin/Vmax for all buses in the IEEE 118-bus system, then run an OPF and report total generation cost and the resulting generation profile."
+    }
+  ]
+}

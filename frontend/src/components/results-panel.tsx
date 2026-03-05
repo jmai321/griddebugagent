@@ -3,7 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PipelineResult, PipelineId, DiagnoseNLResponse } from '@/types/diagnostic';
-import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp, Wrench } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useState, useEffect } from 'react';
 import { NetworkControlBoard } from './network-control-board';
@@ -254,6 +254,83 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
                   {nlExtra.generatedCode}
                 </pre>
               )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Agent reasoning: step-by-step (agentic only) */}
+        {selectedPipeline === 'agentic' && result.toolCalls && result.toolCalls.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Wrench className="h-5 w-5 text-muted-foreground" />
+                Agent reasoning steps
+              </CardTitle>
+              <CardDescription>
+                Step-by-step: tool calls and results (for debugging and understanding agent decisions)
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {result.toolCalls.map((tc, idx) => (
+                <div key={idx} className="rounded-lg border border-border bg-card p-3 space-y-2">
+                  <div className="flex items-center gap-2 font-medium text-sm">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs">
+                      {idx + 1}
+                    </span>
+                    <span>Step {idx + 1}</span>
+                  </div>
+                  <div className="pl-8 text-sm">
+                    <p className="text-muted-foreground mb-1">
+                      <span className="font-medium text-foreground">Tool call:</span>{' '}
+                      <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{tc.tool}</code>
+                      {Object.keys(tc.args || {}).length > 0 && (
+                        <span className="text-muted-foreground ml-1">
+                          ({JSON.stringify(tc.args)})
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-muted-foreground">
+                      <span className="font-medium text-foreground">Result:</span>{' '}
+                      <span className="font-mono text-xs break-all">
+                        {typeof tc.result === 'object'
+                          ? JSON.stringify(tc.result).length > 200
+                            ? JSON.stringify(tc.result).slice(0, 200) + '…'
+                            : JSON.stringify(tc.result)
+                          : String(tc.result)}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              ))}
+              <div className="rounded-lg border border-border border-dashed bg-muted/20 p-3 pl-8">
+                <p className="text-sm font-medium text-foreground">Final step</p>
+                <p className="text-muted-foreground text-sm">Agent produced the report (Root Causes, Affected Components, Recommendations above).</p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Reasoning quality checks (agentic only) */}
+        {selectedPipeline === 'agentic' && result.reasoningQuality && result.reasoningQuality.checks.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Reasoning quality</CardTitle>
+              <CardDescription>
+                Heuristic checks: does the agent&apos;s tool usage support what it claimed in the report?
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm font-medium mb-3">{result.reasoningQuality.summary}</p>
+              <ul className="space-y-2 text-sm">
+                {result.reasoningQuality.checks.map((c) => (
+                  <li key={c.id} className="flex items-start gap-2">
+                    <span className={c.passed ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}>
+                      {c.passed ? '✓' : '○'}
+                    </span>
+                    <span className={c.passed ? 'text-muted-foreground' : ''}>{c.message}</span>
+                  </li>
+                ))}
+              </ul>
             </CardContent>
           </Card>
         )}

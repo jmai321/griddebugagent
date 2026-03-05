@@ -11,11 +11,30 @@ export interface Scenario {
   category: 'normal' | 'nonconvergence' | 'voltage' | 'thermal' | 'contingency';
 }
 
+/** One tool invocation during agentic reasoning. */
+export interface AgentToolCall {
+  iteration: number;
+  tool: string;
+  args: Record<string, unknown>;
+  result: unknown;
+}
+
 export interface PipelineResult {
   analysisStatus: 'success' | 'error' | 'not_implemented' | 'skipped';
   rootCauses: string[];
   affectedComponents: string[];
   correctiveActions: string[];
+  /** Present for agentic pipeline: tools the agent called (reasoning trace). */
+  toolCalls?: AgentToolCall[];
+  /** Full reasoning process text (agentic only): steps and tool results. */
+  reasoningTrace?: string;
+  /** Heuristic checks: does tool usage support the report? (agentic only). */
+  reasoningQuality?: {
+    checks: { id: string; passed: boolean; message: string }[];
+    summary: string;
+    passedCount: number;
+    totalCount: number;
+  };
 }
 
 export type PipelineId = 'baseline' | 'agentic';

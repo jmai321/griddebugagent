@@ -3,29 +3,32 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PipelineResult, PipelineId, DiagnoseNLResponse } from '@/types/diagnostic';
-import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp, Wrench } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp, Wrench, Activity, Terminal } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { NetworkControlBoard } from './network-control-board';
 import { OverrideState, RawNetworkState } from '@/types/diagnostic';
 
 const PIPELINE_LABELS: Record<PipelineId, string> = {
   baseline: 'Baseline (LLM only)',
   agentic: 'Agentic (with tools)',
+  iterative: 'Iterative Debugger (fix loop)',
 };
 
 interface ResultsPanelProps {
   result: PipelineResult | null;
   selectedPipeline: PipelineId;
+  iterativeResult: PipelineResult | null;
   nlExtra: DiagnoseNLResponse | null;
   plotHtml: string | null;
   isLoading: boolean;
+  loadingStage: string | null;
   error: string | null;
   networkName: string | null;
   scenarioName: string | null;
 }
 
-export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: initialPlotHtml, isLoading, error, networkName, scenarioName }: ResultsPanelProps) {
+export function ResultsPanel({ result, selectedPipeline, iterativeResult, nlExtra, plotHtml: initialPlotHtml, isLoading, loadingStage, error, networkName, scenarioName }: ResultsPanelProps) {
   const [codeExpanded, setCodeExpanded] = useState(false);
   const [plotHtml, setPlotHtml] = useState<string | null>(initialPlotHtml);
   const [networkState, setNetworkState] = useState<RawNetworkState | null>(null);
@@ -96,11 +99,11 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
     }
   };
 
-  if (isLoading) {
+  if (isLoading && !result) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-6" role="status" aria-label="Loading">
         <Loader2 className="h-10 w-10 text-muted-foreground animate-spin mb-4" />
-        <p className="text-muted-foreground">Analyzing power flow failure...</p>
+        <p className="text-muted-foreground">{loadingStage || 'Analyzing power flow failure...'}</p>
       </div>
     );
   }
@@ -129,6 +132,13 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
 
   return (
     <div className="flex flex-col h-full p-6 overflow-y-auto">
+      {/* Streaming progress banner */}
+      {isLoading && loadingStage && (
+        <div className="mb-4 flex items-center gap-2 p-3 rounded-lg bg-primary/5 border border-primary/20 text-sm">
+          <Loader2 className="h-4 w-4 text-primary animate-spin flex-shrink-0" />
+          <span className="text-primary font-medium">{loadingStage}</span>
+        </div>
+      )}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
           <h2 className="text-xl font-semibold">Diagnostic Results</h2>
@@ -137,10 +147,10 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
               {PIPELINE_LABELS[selectedPipeline]}
             </Badge>
             <Badge
-              className={`flex items-center gap-1 ${result.analysisStatus === 'success' ? 'bg-success text-white' : result.analysisStatus === 'not_implemented' ? 'bg-muted text-muted-foreground' : 'bg-destructive text-white'}`}
+              className={`flex items-center gap-1 ${(result.analysisStatus ?? 'error') === 'success' ? 'bg-success text-white' : (result.analysisStatus ?? 'error') === 'not_implemented' ? 'bg-muted text-muted-foreground' : 'bg-destructive text-white'}`}
             >
               <CheckCircle2 className="h-3 w-3" />
-              {result.analysisStatus}
+              {result.analysisStatus ?? 'loading'}
             </Badge>
           </div>
         </div>
@@ -148,7 +158,7 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
 
       <div className="space-y-6">
         {/* Simple Text Answer Card */}
-        {nlExtra?.textAnswer && (
+        {nlExtra?.textAnswer && nlExtra.responseType !== 'direct_answer' && (
           <Card className="border-secondary mb-4">
             <CardHeader className="pb-3">
               <CardTitle className="text-lg">Agent Response</CardTitle>
@@ -335,6 +345,78 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
           </Card>
         )}
 
+        {/* Iterative debugger: fix history (shown in agentic view) */}
+        {selectedPipeline === 'agentic' && iterativeResult?.fixHistory && iterativeResult.fixHistory.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Wrench className="h-5 w-5 text-muted-foreground" />
+                Fix History
+                {iterativeResult.finalConverged !== undefined && (
+                  <Badge variant={iterativeResult.finalConverged ? 'default' : 'destructive'} className="ml-auto">
+                    {iterativeResult.finalConverged ? '✓ Converged' : '✗ Not converged'}
+                  </Badge>
+                )}
+              </CardTitle>
+              <CardDescription>
+                Corrective actions applied by the iterative debugger
+                {iterativeResult.iterationsUsed !== undefined && ` (${iterativeResult.iterationsUsed} iterations)`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {iterativeResult.fixHistory.map((fix: any, idx: number) => {
+                  // Handle both automated format {action, rationale} and LLM format {tool, args, result}
+                  const actionName = fix.action || fix.tool || 'unknown';
+                  const description = fix.rationale || fix.message || (fix.result && typeof fix.result === 'object' ? fix.result.message : null) || '';
+                  const hasResult = fix.result != null;
+                  const resultStr = hasResult
+                    ? (typeof fix.result === 'string' ? fix.result : JSON.stringify(fix.result, null, 2))
+                    : null;
+
+                  return (
+                    <div key={idx} className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/30">
+                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold">
+                        {fix.iteration ?? idx}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-sm font-medium font-mono">
+                            {String(actionName)}
+                          </span>
+                          {fix.success !== undefined && (
+                            <Badge variant={fix.success ? 'outline' : 'destructive'} className="text-xs">
+                              {fix.success ? 'applied' : 'failed'}
+                            </Badge>
+                          )}
+                          {fix.result?.success !== undefined && fix.success === undefined && (
+                            <Badge variant={fix.result.success ? 'outline' : 'destructive'} className="text-xs">
+                              {fix.result.success ? 'applied' : 'failed'}
+                            </Badge>
+                          )}
+                        </div>
+                        {description && (
+                          <p className="text-sm text-muted-foreground">{String(description)}</p>
+                        )}
+                        {resultStr && (
+                          <details className="mt-1 group">
+                            <summary className="text-xs cursor-pointer text-muted-foreground hover:text-foreground">
+                              Details
+                            </summary>
+                            <pre className="mt-1 p-2 rounded bg-muted/50 text-xs font-mono overflow-auto max-h-[150px] whitespace-pre-wrap">
+                              {resultStr}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Full Diagnosis Results */}
         {(!nlExtra || nlExtra.responseType === 'full_diagnosis') && (
           <>
@@ -349,9 +431,9 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {result.rootCauses.length > 0 ? (
+                {(result.rootCauses ?? []).length > 0 ? (
                   <ul className="space-y-2">
-                    {result.rootCauses.map((cause, index) => (
+                    {(result.rootCauses ?? []).map((cause, index) => (
                       <li key={index} className="flex items-start gap-2">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
                         <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
@@ -377,9 +459,9 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {result.affectedComponents.length > 0 ? (
+                {(result.affectedComponents ?? []).length > 0 ? (
                   <ul className="space-y-2">
-                    {result.affectedComponents.map((component, index) => (
+                    {(result.affectedComponents ?? []).map((component, index) => (
                       <li key={index} className="flex items-start gap-2">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
                         <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
@@ -405,9 +487,9 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {result.correctiveActions.length > 0 ? (
+                {(result.correctiveActions ?? []).length > 0 ? (
                   <ul className="space-y-2">
-                    {result.correctiveActions.map((action, index) => (
+                    {(result.correctiveActions ?? []).map((action, index) => (
                       <li key={index} className="flex items-start gap-2">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
                         <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
@@ -421,7 +503,79 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
                 )}
               </CardContent>
             </Card>
+
+            {/* Execution Trace (Agentic Only) */}
+            {selectedPipeline === 'agentic' && result.tool_calls && result.tool_calls.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Activity className="h-5 w-5 text-primary" />
+                    Execution Trace
+                  </CardTitle>
+                  <CardDescription>
+                    Step-by-step actions taken by the agent
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {result.tool_calls.map((call, index) => (
+                      <div key={index} className="border rounded-md p-3 bg-muted/20">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Badge variant="outline" className="text-xs">Step {call.iteration}</Badge>
+                          <span className="font-mono text-sm font-semibold flex items-center gap-1">
+                            <Terminal className="h-4 w-4 text-muted-foreground" />
+                            {call.tool}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 grid gap-2">
+                          <details className="group">
+                            <summary className="text-xs font-medium cursor-pointer text-muted-foreground hover:text-foreground flex items-center gap-1">
+                              <ChevronDown className="h-3 w-3 group-open:-rotate-180 transition-transform" />
+                              Payload (Arguments)
+                            </summary>
+                            <pre className="mt-2 p-2 rounded bg-muted/50 text-xs font-mono overflow-auto max-h-[200px] whitespace-pre-wrap">
+                              {JSON.stringify(call.args, null, 2)}
+                            </pre>
+                          </details>
+
+                          <details className="group">
+                            <summary className="text-xs font-medium cursor-pointer text-muted-foreground hover:text-foreground flex items-center gap-1">
+                              <ChevronDown className="h-3 w-3 group-open:-rotate-180 transition-transform" />
+                              Result
+                            </summary>
+                            <pre className="mt-2 p-2 rounded bg-muted/50 text-xs font-mono overflow-auto max-h-[300px] whitespace-pre-wrap border-l-2 border-primary/30 ml-1">
+                              {JSON.stringify(call.result, null, 2)}
+                            </pre>
+                          </details>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </>
+        )}
+
+        {/* Direct Answer Results */}
+        {nlExtra && nlExtra.responseType === 'direct_answer' && result.rawResult && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-success" />
+                Analytical Summary
+              </CardTitle>
+              <CardDescription>
+                Direct response to your query
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                <ReactMarkdown>{result.rawResult}</ReactMarkdown>
+              </div>
+            </CardContent>
+          </Card>
         )}
       </div>
     </div>

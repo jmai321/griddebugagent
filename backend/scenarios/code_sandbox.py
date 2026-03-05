@@ -147,7 +147,30 @@ def execute_safely(
         "True": True, "False": False, "None": None,
         "zip": zip, "sorted": sorted, "reversed": reversed,
         "isinstance": isinstance, "type": type,
+        "__import__": __import__,
     }
+
+    def prepare_for_sc(n: pp.pandapowerNet):
+        n.ext_grid['s_sc_max_mva'] = 1000.0
+        n.ext_grid['rx_max'] = 0.1
+        if getattr(n, "gen", None) is not None and not n.gen.empty:
+            if "vn_kv" not in n.gen.columns:
+                n.gen["vn_kv"] = n.bus.loc[n.gen.bus, "vn_kv"].values
+            else:
+                n.gen["vn_kv"] = n.gen["vn_kv"].fillna(n.bus.loc[n.gen.bus, "vn_kv"].values)
+            for col, val in [("sn_mva", 100.0), ("xdss_pu", 0.2), ("rdss_pu", 0.05), ("cos_phi", 0.8), ("rdss_ohm", 0.05), ("xdss_ohm", 0.2)]:
+                if col not in n.gen.columns:
+                    n.gen[col] = val
+                else:
+                    n.gen[col] = n.gen[col].fillna(val)
+        if getattr(n, "sgen", None) is not None and not n.sgen.empty:
+            for col, val in [("sn_mva", 10.0), ("k", 1.2), ("rx", 0.1)]:
+                if col not in n.sgen.columns:
+                    n.sgen[col] = val
+                else:
+                    n.sgen[col] = n.sgen[col].fillna(val)
+
+    pp.prepare_for_sc = prepare_for_sc
 
     namespace = {
         "__builtins__": safe_builtins,
@@ -155,6 +178,7 @@ def execute_safely(
         "pp": pp,
         "pd": pd,
         "np": np,
+        "prepare_for_sc": prepare_for_sc,
     }
 
     # Step 3: Execute with timeout (thread-safe, no signal.SIGALRM)

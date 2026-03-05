@@ -158,12 +158,13 @@ pandapower DataFrames: `net.bus`, `net.line`, `net.load`, `net.gen`, \
 - Use standard pandapower API calls (e.g., `pp.create_load()`, direct DataFrame mutation).
 - Do NOT import any modules — `pp`, `pd`, `np` are already available.
 - Do NOT call `pp.runpp()` — the caller handles power flow execution.
+- For short circuit analysis, you MUST call `prepare_for_sc(net)` first. Then use `import pandapower.shortcircuit as sc` and call `sc.calc_sc(net, bus=X, fault="3ph")`. Do NOT use "fault_bus".
 - Keep code concise and focused on the mutation.
 
 ## Output Format
-You MUST respond with valid JSON (no markdown fences) in this exact format. Set `response_type` to `text_only` for simple questions, `plot_only` for simple plot requests, or `full_diagnosis` if the user wants to simulate a failure and diagnose it.
+You MUST respond with valid JSON (no markdown fences) in this exact format. Set `response_type` to `text_only` for simple questions (like retrieving info without simulations), `plot_only` for simple plot requests, `direct_answer` for analytical queries where the user wants you to run power flow or contingency and summarize results, or `full_diagnosis` if the user wants to simulate a failure and diagnose it with full Root Causes / Affected Components formatting.
 {{
-  "response_type": "<text_only|plot_only|full_diagnosis>",
+  "response_type": "<text_only|plot_only|direct_answer|full_diagnosis>",
   "text_answer": "<Brief explanation or answer to the user's question. For text_only, this can be the final response.>",
   "mutation_code": "<Python code as a single string with newlines. Leave empty if no mutation needed.>",
   "ground_truth": {{

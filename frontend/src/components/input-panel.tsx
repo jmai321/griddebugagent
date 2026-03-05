@@ -20,6 +20,7 @@ interface InputPanelProps {
   isLoading: boolean;
   selectedPipeline: PipelineId;
   onPipelineChange: (pipeline: PipelineId) => void;
+  readyPipelines: Set<PipelineId>;
 }
 
 const EXAMPLE_PROMPTS = [
@@ -30,7 +31,7 @@ const EXAMPLE_PROMPTS = [
   'Reduce thermal limits of all lines to 25% of original',
 ];
 
-export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline, onPipelineChange }: InputPanelProps) {
+export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline, onPipelineChange, readyPipelines }: InputPanelProps) {
   const [networks, setNetworks] = useState<Network[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [selectedNetwork, setSelectedNetwork] = useState<string>('');
@@ -129,8 +130,8 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline
               </SelectTrigger>
               <SelectContent>
                 {PIPELINE_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.id} value={opt.id}>
-                    {opt.label}
+                  <SelectItem key={opt.id} value={opt.id} disabled={!readyPipelines.has(opt.id)}>
+                    {opt.label}{!readyPipelines.has(opt.id) ? ' (loading…)' : ''}
                   </SelectItem>
                 ))}
               </SelectContent>

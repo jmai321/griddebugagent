@@ -169,13 +169,15 @@ class EvidenceReport:
                 lines.append(f"  Range: {self.voltage_min_pu:.4f} – {self.voltage_max_pu:.4f} pu")
                 lines.append(f"  Mean:  {self.voltage_mean_pu:.4f} pu")
             if self.undervoltage_buses:
-                lines.append(f"  Under-voltage (<0.95 pu): {len(self.undervoltage_buses)} buses")
+                lines.append(f"  Under-voltage (under bus-specific limit or default 0.95 pu): {len(self.undervoltage_buses)} buses")
                 for b in self.undervoltage_buses[:5]:
-                    lines.append(f"    Bus {b['index']}: {b['vm_pu']:.4f} pu")
+                    limit_str = f" (limit: {b['limit']:.4f} pu)" if 'limit' in b else ""
+                    lines.append(f"    Bus {b['index']}: {b['vm_pu']:.4f} pu{limit_str}")
             if self.overvoltage_buses:
-                lines.append(f"  Over-voltage (>1.05 pu): {len(self.overvoltage_buses)} buses")
+                lines.append(f"  Over-voltage (over bus-specific limit or default 1.05 pu): {len(self.overvoltage_buses)} buses")
                 for b in self.overvoltage_buses[:5]:
-                    lines.append(f"    Bus {b['index']}: {b['vm_pu']:.4f} pu")
+                    limit_str = f" (limit: {b['limit']:.4f} pu)" if 'limit' in b else ""
+                    lines.append(f"    Bus {b['index']}: {b['vm_pu']:.4f} pu{limit_str}")
 
             lines.append(f"\n── RESULT: Line Loading ({self.line_count} lines) ──")
             if self.max_line_loading_pct is not None:

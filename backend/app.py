@@ -3,7 +3,6 @@ import re
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
@@ -27,6 +26,7 @@ from scenarios import (
 )
 from agents.baseline import BaselineAgent
 from agents.agentic_pipeline import AgenticPipelineAgent
+from agents.iterative_debugger import IterativeDebuggerAgent
 from scenarios.nl_scenario_generator import NLScenarioGenerator
 
 load_dotenv()
@@ -51,6 +51,7 @@ _openai_key = os.getenv("OPENAI_API_KEY", "")
 _llm_client = OpenAI(api_key=_openai_key) if _openai_key else None
 _baseline_agent = BaselineAgent(llm_client=_llm_client)
 _agentic_agent = AgenticPipelineAgent(llm_client=_llm_client)
+_iterative_agent = IterativeDebuggerAgent(llm_client=_llm_client)
 _nl_generator = NLScenarioGenerator(llm_client=_llm_client)
 
 
@@ -124,6 +125,9 @@ def _find_and_apply_scenario(scenario_id: str, network: str):
     Instantiate the matching scenario, apply it, and return
     (scenario_object, ground_truth_result).
     """
+    if scenario_id == "nl_generated":
+        scenario_id = "normal_operation"
+
     entry = next((s for s in SCENARIOS if s["id"] == scenario_id), None)
     if entry is None:
         raise HTTPException(404, f"Unknown scenario: {scenario_id}")
@@ -180,6 +184,8 @@ def _parse_llm_report(report: str) -> dict:
                 if item:
                     items.append(item)
                 continue
+        if not items and block.strip():
+            return [block.strip()]
         return items
 
     def extract_section_items(text: str, section: str) -> list[str]:
@@ -206,6 +212,7 @@ def _build_pipeline_result(report: str, analysis_status: str = "success") -> dic
         "rootCauses": parsed["rootCauses"],
         "affectedComponents": parsed["affectedComponents"],
         "correctiveActions": parsed["correctiveActions"],
+        "rawResult": report,
     }
 
 
@@ -444,6 +451,7 @@ class DiagnoseResult(BaseModel):
     """Response body returned by the /diagnose endpoint."""
     baseline: dict
     agentic: dict
+    iterative: dict = {}
     plotHtml: str = ""
 
 
@@ -499,32 +507,6 @@ def get_scenarios():
     return {"scenarios": SCENARIOS}
 
 
-
-# ---------------------
-#  GET  /api/visualize
-# ---------------------
-
-@app.get("/api/visualize/{network}/{scenario}", response_class=HTMLResponse)
-def get_visualization(network: str, scenario: str):
-    """
-    Generate an interactive Plotly HTML visualization of the power network
-    for a given scenario to verify testcases visually.
-    """
-    try:
-        from pandapower.plotting.plotly import simple_plotly
-    except ImportError:
-        return HTMLResponse("Plotly is not installed. Run `pip install plotly matplotlib`", status_code=500)
-    
-    # Apply the scenario to get a modified network
-    scenario_obj, _ = _find_and_apply_scenario(scenario, network)
-    net = scenario_obj.net
-    
-    try:
-        fig = simple_plotly(net)
-        html_content = fig.to_html(include_plotlyjs="cdn", full_html=True)
-        return HTMLResponse(content=html_content)
-    except Exception as e:
-        return HTMLResponse(content=f"Error generating plot: {e}", status_code=500)
 
 
 # ---------------------
@@ -730,7 +712,6 @@ def run_diagnose(req: DiagnoseRequest):
         baseline_status = "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status)
 
-    # --- Agentic pipeline (with tools) ---
     try:
         agentic_result = _agentic_agent.diagnose(net, network_name=req.network, user_query=user_query)
         agentic_report = agentic_result["response"]
@@ -740,6 +721,8 @@ def run_diagnose(req: DiagnoseRequest):
         agentic = _build_pipeline_result(agentic_report, agentic_status)
         tool_calls = agentic_result.get("tool_calls", [])
         agentic["toolCalls"] = tool_calls
+        agentic["conversation"] = agentic_result.get("conversation", [])
+        agentic["executionTrace"] = tool_calls
         reasoning_trace = _format_reasoning_trace(tool_calls, agentic_report)
         agentic["reasoningTrace"] = reasoning_trace
         agentic["reasoningQuality"] = _evaluate_reasoning_quality(
@@ -760,14 +743,149 @@ def run_diagnose(req: DiagnoseRequest):
             "reasoningQuality": {"checks": [], "summary": "N/A (agent failed)", "passedCount": 0, "totalCount": 0},
         }
 
+    # --- Iterative debugger pipeline (Level 3: diagnose + fix loop) ---
+    try:
+        # Re-apply scenario for a fresh network (agentic pipeline may have modified it)
+        scenario_obj_iter, _ = _find_and_apply_scenario(req.scenario, req.network)
+        net_iter = scenario_obj_iter.net
+        scenario_obj_iter.run_pf()
+
+        iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        iter_report = iter_result["response"]
+        iter_status = "success"
+        if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
+            iter_status = "error"
+        iterative = _build_pipeline_result(iter_report, iter_status)
+        iterative["fixHistory"] = iter_result.get("fix_history", [])
+        iterative["finalConverged"] = iter_result.get("final_converged", False)
+        iterative["iterationsUsed"] = iter_result.get("iterations_used", 0)
+        iterative["executionTrace"] = iter_result.get("fix_history", [])
+    except Exception as e:
+        iterative = {
+            "analysisStatus": "error",
+            "rootCauses": [],
+            "affectedComponents": [],
+            "correctiveActions": [],
+            "fixHistory": [],
+            "finalConverged": False,
+            "iterationsUsed": 0,
+            "executionTrace": [],
+            "error": str(e),
+        }
+
     # Generate visualization
     combined_components = _get_combined_affected_components(net, ground_truth.affected_components)
     plot_html = _generate_diagnostic_plot(net, combined_components)
 
-    return DiagnoseResult(baseline=baseline, agentic=agentic, plotHtml=plot_html)
+    return DiagnoseResult(baseline=baseline, agentic=agentic, iterative=iterative, plotHtml=plot_html)
 
 
 # ---------------------
+#  POST /diagnose_stream  (Server-Sent Events)
+# ---------------------
+
+from fastapi.responses import StreamingResponse
+import asyncio, traceback
+
+@app.post("/diagnose_stream")
+async def run_diagnose_stream(req: DiagnoseRequest):
+    """
+    Same as /diagnose, but streams each pipeline result as a Server-Sent Event
+    the moment it completes:  plot → baseline → agentic → iterative → done.
+    Sync pipeline calls are offloaded to threads so the event loop can flush.
+    """
+    valid_networks = [n["id"] for n in NETWORKS]
+    if req.network not in valid_networks:
+        raise HTTPException(400, f"Unknown network: {req.network}")
+
+    def _sse_event(event: str, data: dict) -> str:
+        payload = json.dumps(data, default=str)
+        return f"event: {event}\ndata: {payload}\n\n"
+
+    # ---------- sync helpers (run in thread pool) ----------
+    def _run_baseline(net, network_name, user_query):
+        try:
+            r = _baseline_agent.diagnose(net, network_name=network_name, user_query=user_query)
+            report = r["response"]
+            status = "error" if report.startswith("LLM call failed") else "success"
+            return _build_pipeline_result(report, status)
+        except Exception as e:
+            return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
+                    "correctiveActions": [], "rawResult": str(e)}
+
+    def _run_agentic(net, network_name, user_query):
+        try:
+            r = _agentic_agent.diagnose(net, network_name=network_name, user_query=user_query)
+            report = r["response"]
+            status = "success"
+            if report.startswith("Agent loop error") or report.startswith("LLM call failed"):
+                status = "error"
+            out = _build_pipeline_result(report, status)
+            tc = r.get("tool_calls", [])
+            out["toolCalls"] = tc
+            out["conversation"] = r.get("conversation", [])
+            out["executionTrace"] = tc
+            out["reasoningTrace"] = _format_reasoning_trace(tc, report)
+            out["reasoningQuality"] = _evaluate_reasoning_quality(
+                tc, out.get("rootCauses", []), out.get("affectedComponents", []),
+                out.get("correctiveActions", []))
+            return out
+        except Exception as e:
+            return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
+                    "correctiveActions": [], "toolCalls": [], "reasoningTrace": f"Agent failed: {e}",
+                    "reasoningQuality": {"checks": [], "summary": "N/A", "passedCount": 0, "totalCount": 0}}
+
+    def _run_iterative(scenario_id, network_name):
+        try:
+            s, _ = _find_and_apply_scenario(scenario_id, network_name)
+            s.run_pf()
+            r = _iterative_agent.diagnose(s.net, network_name=network_name)
+            report = r["response"]
+            status = "success"
+            if report.startswith("Agent loop error") or report.startswith("LLM call failed"):
+                status = "error"
+            out = _build_pipeline_result(report, status)
+            out["fixHistory"] = r.get("fix_history", [])
+            out["finalConverged"] = r.get("final_converged", False)
+            out["iterationsUsed"] = r.get("iterations_used", 0)
+            out["executionTrace"] = r.get("fix_history", [])
+            return out
+        except Exception as e:
+            return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
+                    "correctiveActions": [], "fixHistory": [], "finalConverged": False,
+                    "iterationsUsed": 0, "executionTrace": [], "error": str(e)}
+
+    async def event_generator():
+        # Apply scenario
+        scenario_obj, ground_truth = _find_and_apply_scenario(req.scenario, req.network)
+        net = scenario_obj.net
+        scenario_obj.run_pf()
+        user_query = (req.query or "").strip() or ""
+
+        # 1) Plot — instant, no LLM
+        try:
+            combined = _get_combined_affected_components(net, ground_truth.affected_components)
+            plot_html = _generate_diagnostic_plot(net, combined)
+        except Exception:
+            plot_html = ""
+        yield _sse_event("plot", {"plotHtml": plot_html})
+
+        # 2) Baseline — offload to thread so yield actually flushes
+        baseline = await asyncio.to_thread(_run_baseline, net, req.network, user_query)
+        yield _sse_event("baseline", baseline)
+
+        # 3) Agentic
+        agentic = await asyncio.to_thread(_run_agentic, net, req.network, user_query)
+        yield _sse_event("agentic", agentic)
+
+        # 4) Iterative debugger (fresh network)
+        iterative = await asyncio.to_thread(_run_iterative, req.scenario, req.network)
+        yield _sse_event("iterative", iterative)
+
+        # 5) Done
+        yield _sse_event("done", {"status": "complete"})
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 #  POST /diagnose_nl
 # ---------------------
 
@@ -887,6 +1005,8 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         agentic = _build_pipeline_result(agentic_report, agentic_status)
         tool_calls = agentic_result.get("tool_calls", [])
         agentic["toolCalls"] = tool_calls
+        agentic["conversation"] = agentic_result.get("conversation", [])
+        agentic["executionTrace"] = tool_calls
         reasoning_trace_nl = _format_reasoning_trace(tool_calls, agentic_report)
         agentic["reasoningTrace"] = reasoning_trace_nl
         agentic["reasoningQuality"] = _evaluate_reasoning_quality(
@@ -907,6 +1027,43 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
             "reasoningQuality": {"checks": [], "summary": "N/A (agent failed)", "passedCount": 0, "totalCount": 0},
         }
 
+    # --- Iterative debugger pipeline (Level 3: diagnose + fix loop) ---
+    try:
+        import copy
+        net_iter = copy.deepcopy(gen_result["net"])
+        # Re-apply the generated code on the fresh copy
+        generated_code = gen_result.get("generated_code", "")
+        if generated_code:
+            execute_safely(generated_code, net_iter, timeout=5)
+        # Attempt initial power flow
+        try:
+            pp.runpp(net_iter)
+        except Exception:
+            pass
+
+        iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        iter_report = iter_result["response"]
+        iter_status = "success"
+        if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
+            iter_status = "error"
+        iterative = _build_pipeline_result(iter_report, iter_status)
+        iterative["fixHistory"] = iter_result.get("fix_history", [])
+        iterative["finalConverged"] = iter_result.get("final_converged", False)
+        iterative["iterationsUsed"] = iter_result.get("iterations_used", 0)
+        iterative["executionTrace"] = iter_result.get("fix_history", [])
+    except Exception as e:
+        iterative = {
+            "analysisStatus": "error",
+            "rootCauses": [],
+            "affectedComponents": [],
+            "correctiveActions": [],
+            "fixHistory": [],
+            "finalConverged": False,
+            "iterationsUsed": 0,
+            "executionTrace": [],
+            "error": str(e),
+        }
+
     return {
         "generationStatus": "success",
         "generationError": None,
@@ -919,27 +1076,12 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         },
         "baseline": baseline,
         "agentic": agentic,
+        "iterative": iterative,
         "plotHtml": plot_html,
         "responseType": response_type,
         "textAnswer": text_answer,
     }
 
-
-# ---------------------
-#  GET  /result/{scenario}
-# ---------------------
-
-@app.get("/result/{scenario}")
-def get_result(scenario: str, network: str = "case14"):
-    """
-    Retrieve the latest diagnosis text output for a given scenario + network.
-    TODO: fetch stored result from database/cache.
-    """
-    return {
-        "network": network,
-        "scenario": scenario,
-        "report": "",
-    }
 
 
 # ---------------------

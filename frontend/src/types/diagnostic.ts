@@ -20,12 +20,15 @@ export interface AgentToolCall {
 }
 
 export interface PipelineResult {
+  rawResult?: string;
   analysisStatus: 'success' | 'error' | 'not_implemented' | 'skipped';
   rootCauses: string[];
   affectedComponents: string[];
   correctiveActions: string[];
   /** Present for agentic pipeline: tools the agent called (reasoning trace). */
   toolCalls?: AgentToolCall[];
+  /** Alias for backward compat with local execution trace UI */
+  tool_calls?: AgentToolCall[];
   /** Full reasoning process text (agentic only): steps and tool results. */
   reasoningTrace?: string;
   /** Heuristic checks: does tool usage support the report? (agentic only). */
@@ -35,13 +38,22 @@ export interface PipelineResult {
     passedCount: number;
     totalCount: number;
   };
+  /** Iterative debugger: history of corrective actions applied. */
+  fixHistory?: Array<Record<string, unknown>>;
+  /** Whether power flow converged after all fixes (iterative only). */
+  finalConverged?: boolean;
+  /** Number of fix iterations used (iterative only). */
+  iterationsUsed?: number;
+  /** Execution trace (tool calls or fix history). */
+  executionTrace?: unknown[];
 }
 
-export type PipelineId = 'baseline' | 'agentic';
+export type PipelineId = 'baseline' | 'agentic' | 'iterative';
 
 export interface DiagnoseResponse {
   baseline: PipelineResult;
   agentic: PipelineResult;
+  iterative?: PipelineResult;
   plotHtml?: string;
 }
 
@@ -59,8 +71,9 @@ export interface DiagnoseNLResponse {
   generatedGroundTruth: GeneratedGroundTruth | null;
   baseline: PipelineResult;
   agentic: PipelineResult;
+  iterative?: PipelineResult;
   plotHtml?: string;
-  responseType: 'text_only' | 'plot_only' | 'full_diagnosis';
+  responseType: 'text_only' | 'plot_only' | 'direct_answer' | 'full_diagnosis';
   textAnswer?: string;
 }
 

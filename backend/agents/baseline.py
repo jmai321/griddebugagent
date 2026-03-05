@@ -37,9 +37,15 @@ When the power flow CONVERGED but has violations:
 
 ## Output Format
 
-If a specific USER QUERY is provided, your primary goal is to answer that query. You must still adhere to the Root Causes / Affected Components / Corrective Actions markdown format below, but adapt the content of those sections to serve as the direct answer to the user's question. If no user query is provided, diagnose the most prominent network flaws.
+If a specific USER QUERY is provided, your primary goal is to answer that query directly. You MUST output ONLY the direct answer exactly as requested (e.g., a simple bulleted list of violations). Do NOT use the standard Root Causes formatting, do NOT write any headers (like "## Root Causes" or "FINAL REPORT:"), and do NOT include conversational filler like "I will identify...". Just output the exact requested information.
 
-Format your response as a structured diagnostic report:
+If the user asks to summarize contingency limit violations, you MUST use exactly this concise one-line format for each tested outage:
+- Line <ID> outage: <N> voltage violation (bus <ID> at <V> pu < <LIMIT> pu); <M> branch overloads.
+or
+- Line <ID> outage: no operational limit violations.
+Make sure to apply this format strictly and do not add any conversational text.
+
+If no user query is provided, or the query asks for a general diagnosis without specific formatting requirements, format your response as a structured diagnostic report:
 ## Root Causes
 (Rank from most to least likely. Be specific — cite numbers from the evidence.)
 ## Affected Components

@@ -1,4 +1,4 @@
-import { Network, Scenario, DiagnoseResponse, DiagnoseNLResponse } from '@/types/diagnostic';
+import { Network, Scenario, DiagnoseNLResponse } from '@/types/diagnostic';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -16,20 +16,60 @@ export async function fetchScenarios(): Promise<Scenario[]> {
   return data.scenarios;
 }
 
-export async function runDiagnosis(
+
+
+/**
+ * Stream diagnosis results via SSE — each pipeline arrives as a separate event.
+ * The callback is invoked for each event: 'baseline', 'agentic', 'iterative', 'plot', 'done'.
+ */
+export async function runDiagnosisStream(
   network: string,
   scenario: string,
-  query?: string
-): Promise<DiagnoseResponse> {
+  query: string | undefined,
+  onEvent: (event: string, data: any) => void,
+): Promise<void> {
   const body: { network: string; scenario: string; query?: string } = { network, scenario };
   if (query?.trim()) body.query = query.trim();
-  const res = await fetch(`${API_BASE}/diagnose`, {
+
+  const res = await fetch(`${API_BASE}/diagnose_stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error('Diagnosis request failed');
-  return res.json();
+
+  if (!res.ok) throw new Error('Streaming diagnosis request failed');
+  if (!res.body) throw new Error('No response body');
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE events from buffer
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() || ''; // keep incomplete chunk
+
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      let eventName = 'message';
+      let dataStr = '';
+      for (const line of part.split('\n')) {
+        if (line.startsWith('event: ')) eventName = line.slice(7).trim();
+        else if (line.startsWith('data: ')) dataStr = line.slice(6);
+      }
+      if (dataStr) {
+        try {
+          const data = JSON.parse(dataStr);
+          onEvent(eventName, data);
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
 }
 
 export async function runNLDiagnosis(network: string, description: string): Promise<DiagnoseNLResponse> {

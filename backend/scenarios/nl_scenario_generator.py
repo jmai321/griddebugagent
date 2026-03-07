@@ -104,8 +104,8 @@ FEW_SHOT_EXAMPLES = [
         "description": "What is the voltage on bus 4 in the default case?",
         "network": "case14",
         "response": {
-            "response_type": "text_only",
-            "text_answer": "The voltage on Bus 4 in the default IEEE 14-bus network will be calculated and reported.",
+            "response_type": "direct_answer",
+            "text_answer": "",
             "mutation_code": "",
             "ground_truth": {
                 "failure_type": "normal",
@@ -162,10 +162,10 @@ pandapower DataFrames: `net.bus`, `net.line`, `net.load`, `net.gen`, \
 - Keep code concise and focused on the mutation.
 
 ## Output Format
-You MUST respond with valid JSON (no markdown fences) in this exact format. Set `response_type` to `text_only` for simple questions (like retrieving info without simulations), `plot_only` for simple plot requests, `direct_answer` for analytical queries where the user wants you to run power flow or contingency and summarize results, or `full_diagnosis` if the user wants to simulate a failure and diagnose it with full Root Causes / Affected Components formatting.
+You MUST respond with valid JSON (no markdown fences) in this exact format. Set `response_type` to `text_only` ONLY for conceptual/theoretical questions that DO NOT require looking up specific data from the network. Set `response_type` to `plot_only` for simple plot requests. Set `response_type` to `direct_answer` for analytical queries OR when the user wants to retrieve specific information from the network (e.g. "What are the limits of bus 3?", "Which buses connect to line 11?") so the agentic pipeline can use tools to look it up. Set to `full_diagnosis` if the user wants to simulate a failure and diagnose it with full Root Causes / Affected Components formatting.
 {{
   "response_type": "<text_only|plot_only|direct_answer|full_diagnosis>",
-  "text_answer": "<Brief explanation or answer to the user's question. For text_only, this can be the final response.>",
+  "text_answer": "<Brief conceptual explanation. Leave empty or generic for direct_answer, as the agent will provide the real answer.>",
   "mutation_code": "<Python code as a single string with newlines. Leave empty if no mutation needed.>",
   "ground_truth": {{
     "failure_type": "<normal|nonconvergence|voltage|thermal|contingency>",

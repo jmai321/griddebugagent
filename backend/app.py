@@ -64,7 +64,7 @@ import pandapower.networks as nw
 
 def _get_available_networks() -> list[dict]:
     networks = []
-    common_cases = ["case14", "case30", "case57", "case118", "case300"]
+    common_cases = ["case14", "case30", "case39", "case57", "case118", "case300"]
     
     # Priority defaults
     for name in common_cases:

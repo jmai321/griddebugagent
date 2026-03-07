@@ -149,22 +149,15 @@ def _parse_llm_report(report: str) -> dict:
     Tries to be robust to:
       - Sections appearing on the same line (no newlines)
       - Bulleted lists (-, *) and numbered lists (1., 2., ...)
-      - Optional text after section headers (e.g. "## Root Causes (ranked...)")
+      - Various markdown headers (##, **, etc.)
     """
     result = {"rootCauses": [], "affectedComponents": [], "correctiveActions": []}
 
     def _normalize_block(text: str) -> str:
-        """
-        Insert newlines to make list-like content line-oriented.
-        We only split numbered items when the dot is followed by whitespace,
-        so we don't break decimals like 11.77 or 1.08.
-        """
         text = text.strip()
-        # Force each heading to start a new line (handles one-line outputs)
-        text = re.sub(r"\s*(##\s*)", r"\n\1", text)
         # Convert " - " into real bullets on new lines
         text = re.sub(r"\s-\s", r"\n- ", text)
-        # Convert " 1. " into numbered items on new lines (dot must be followed by whitespace)
+        # Convert " 1. " into numbered items on new lines
         text = re.sub(r"\s(\d+)\.\s+", r"\n\1. ", text)
         return text.strip()
 
@@ -172,6 +165,9 @@ def _parse_llm_report(report: str) -> dict:
         items: list[str] = []
         for line in _normalize_block(block).split("\n"):
             line = line.strip()
+            # Remove leading/trailing bold markers
+            if line.startswith("**") and line.endswith("**"):
+                line = line[2:-2].strip()
             if not line:
                 continue
             if line.startswith(("-", "*")):
@@ -184,18 +180,49 @@ def _parse_llm_report(report: str) -> dict:
                 if item:
                     items.append(item)
                 continue
+            items.append(line)
         if not items and block.strip():
             return [block.strip()]
         return items
 
     def extract_section_items(text: str, section: str) -> list[str]:
-        # Match section header (optional suffix) then capture until next "##" or end.
-        # Don't require a newline after the header.
-        pattern = rf"##\s*{re.escape(section)}[^\n#]*\s*(.*?)(?=\s*##\s|\Z)"
-        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-        if not match:
-            return []
-        return _extract_items(match.group(1))
+        lines = text.split("\n")
+        in_section = False
+        captured_lines = []
+        
+        section_lower = section.lower()
+        known_headers = ["root causes", "affected components", "corrective actions", "reasoning trace"]
+        
+        for line in lines:
+            line_lower = line.lower()
+            
+            # Check if this line is ANY header
+            is_any_header = False
+            for h in known_headers:
+                # Look for header near the start of the line, ignoring markdown markers
+                cleaned_line = re.sub(r'^[\s#*\-\d.]+', '', line_lower).strip()
+                if cleaned_line.startswith(h):
+                    is_any_header = True
+                    break
+                    
+            if is_any_header:
+                cleaned_line = re.sub(r'^[\s#*\-\d.]+', '', line_lower).strip()
+                if cleaned_line.startswith(section_lower):
+                    in_section = True
+                    # Check if there's content on the same line after a colon or **
+                    if ":" in line:
+                        content_after_colon = line.split(":", 1)[1].strip()
+                        if content_after_colon:
+                            # if it ends with bold marker, strip it
+                            if content_after_colon.endswith("**"):
+                                content_after_colon = content_after_colon[:-2]
+                            captured_lines.append(content_after_colon)
+                else:
+                    in_section = False
+            elif in_section:
+                captured_lines.append(line)
+                
+        return _extract_items("\n".join(captured_lines))
 
     result["rootCauses"] = extract_section_items(report, "Root Causes")
     result["affectedComponents"] = extract_section_items(report, "Affected Components")

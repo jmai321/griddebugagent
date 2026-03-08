@@ -13,7 +13,7 @@ from typing import Any
 
 import pandapower as pp
 
-MAX_FIX_ITERATIONS = 5
+MAX_FIX_ITERATIONS = 10
 from rule_engine.preprocessor import Preprocessor
 from tools.query_tools import QueryTools
 from tools.simulation_tools import SimulationTools
@@ -38,11 +38,12 @@ Your workflow:
 2. PROPOSE: Choose a minimal corrective action
 3. APPLY: Call a modification tool to apply the fix
 4. VERIFY: Re-run power flow to check if the fix worked
-5. ITERATE: If not fixed, try the next most likely correction
+5. CHECK CONSTRAINTS: If it converges, YOU MUST run `check_overloads` and `check_voltage_violations`. A converged network with violations is NOT fixed!
+6. ITERATE: If not fixed, try the next most likely correction
 
 After each fix attempt, report:
 - What you tried and why
-- Whether it improved the situation
+- Whether it improved the situation (including remaining violations)
 - What to try next (if needed)
 
 When the simulation converges with all constraints satisfied, OR you've \

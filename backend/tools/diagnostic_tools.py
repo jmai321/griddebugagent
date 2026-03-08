@@ -45,6 +45,30 @@ TOOL_DEFINITIONS = [
 ]
 
 
+def _convert_to_native(obj):
+    import numpy as np
+    import pandas as pd
+    if isinstance(obj, dict):
+        return {k: _convert_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple, set)):
+        return [_convert_to_native(i) for i in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return _convert_to_native(obj.tolist())
+    elif isinstance(obj, pd.Series):
+        return _convert_to_native(obj.tolist())
+    elif isinstance(obj, pd.DataFrame):
+        return _convert_to_native(obj.to_dict(orient="records"))
+    elif pd.isna(obj):
+        return None
+    elif isinstance(obj, (int, float, str, bool, type(None))):
+        return obj
+    else:
+        return str(obj)
+
 class DiagnosticTools:
     TOOL_DEFINITIONS = TOOL_DEFINITIONS
 
@@ -57,8 +81,10 @@ class DiagnosticTools:
                 net, report_style=None, warnings_only=True, return_result_dict=True
             )
             if isinstance(result, dict):
-                return {"ran": True, "results": {k: str(v) for k, v in result.items()}}
-            return {"ran": True, "results": str(result)}
+                # Filter out empty results to keep output clean
+                cleaned_result = {k: _convert_to_native(v) for k, v in result.items() if v}
+                return {"ran": True, "results": cleaned_result}
+            return {"ran": True, "results": _convert_to_native(result)}
         except Exception as e:
             return {"ran": False, "error": str(e)}
 

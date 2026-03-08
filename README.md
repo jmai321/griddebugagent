@@ -50,20 +50,30 @@ The **agentic** pipeline reasons in a **ReAct loop**:
 - **Correctness**  
   “Correct” usually means: (1) root cause matches the scenario’s ground truth, (2) suggested fixes are consistent with solver evidence and tool outputs. Use the evaluation script and manual inspection of `reasoningTrace` + `reasoningQuality` together.
 
-### 1.4 Tools (Agentic Only)
+### 1.4 Tools and Action Space (Agentic & Iterative)
 
-| Category | Tools |
-|----------|--------|
-| **Query** | `get_network_summary`, `get_bus_data`, `get_line_data`, `get_gen_data`, `get_voltage_profile`, `get_loading_profile`, `get_power_balance` |
-| **Simulation** | `run_power_flow`, `run_dc_power_flow`, `run_n1_contingency` |
-| **Diagnostic** | `run_full_diagnostics`, `check_overloads`, `check_voltage_violations`, `find_disconnected_areas` |
+The **Agentic** pipeline relies on several categories of tools to inspect the grid. The **Iterative Debugger** (Level 3) further extends this with **Modification/Action** tools to actively fix the grid (its Action Space):
 
-### 1.5 Network Visualization
+| Category | Tools | Description |
+|----------|--------|-------------|
+| **Query** | `get_network_summary`, `get_bus_data`, `get_line_data`, `get_gen_data`, `get_voltage_profile`, `get_loading_profile`, `get_power_balance` | Inspects grid topology, limits, profiles, and basic data. |
+| **Simulation** | `run_power_flow`, `run_dc_power_flow`, `run_n1_contingency` | Executes AC/DC solvers or contingency analyses to compute grid states. |
+| **Diagnostic** | `run_full_diagnostics`, `check_overloads`, `check_voltage_violations`, `find_disconnected_areas` | Heuristic checks that directly identify specific constraint violations and isolated components. |
+| **Modification (Action Space)** | `shed_load`, `curtail_load`, `adjust_generation`, `add_reactive_compensation`, `add_shunt_compensation`, `toggle_element`, `switch_element`, `adjust_voltage_setpoint`, `scale_all_loads` | Enables the agent to physically alter the grid (e.g., shed loads, switch lines, adjust generation/voltage, add emergency capacitors) to resolve violations. |
+
+### 1.5 The Iterative Debugger Pipeline
+
+Alongside the Baseline and purely Diagnostic Agentic pipelines, the system now features an **Iterative Debugger**. 
+- It uses the full **Action Space** to propose a fix, apply it to a sandbox copy of the network, and run validation checks (`run_power_flow`, `check_overloads`, `check_voltage_violations`).
+- If constraints are still violated, the agent loops and applies further corrections (e.g., shedding more load, adding capacitors). 
+- The frontend plots the final, **Fixed Network** state to visually confirm the resolution of violations, alongside a detailed **Fix History** log.
+
+### 1.6 Network Visualization
 
 - Backend uses **pandapower.plotting.plotly** (`simple_plotly` + bus/line/trafo traces) to build a Plotly figure. **Ground-truth affected components** are highlighted in red.
 - API returns `plotHtml` (full HTML string). Frontend renders it in an **iframe** (`srcDoc`); user can zoom and hover.
 
-### 1.6 Frontend
+### 1.7 Frontend
 
 - **Pipeline selector**: Dropdown to show either “Baseline (LLM only)” or “Agentic (with tools)” results.
 - **Mode toggle**: “Describe Failure” (NL) vs “Preset Scenarios”. NL success shows generated scenario card and baseline/agentic results.

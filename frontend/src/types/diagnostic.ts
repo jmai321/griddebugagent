@@ -55,6 +55,7 @@ export interface DiagnoseResponse {
   agentic: PipelineResult;
   iterative?: PipelineResult;
   plotHtml?: string;
+  iterativePlotHtml?: string;
 }
 
 export interface GeneratedGroundTruth {
@@ -73,6 +74,7 @@ export interface DiagnoseNLResponse {
   agentic: PipelineResult;
   iterative?: PipelineResult;
   plotHtml?: string;
+  iterativePlotHtml?: string;
   responseType: 'text_only' | 'plot_only' | 'direct_answer' | 'full_diagnosis';
   textAnswer?: string;
 }

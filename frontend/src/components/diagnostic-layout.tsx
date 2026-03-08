@@ -11,6 +11,7 @@ export function DiagnosticLayout() {
   const [selectedPipeline, setSelectedPipeline] = useState<PipelineId>('baseline');
   const [nlExtra, setNlExtra] = useState<DiagnoseNLResponse | null>(null);
   const [plotHtml, setPlotHtml] = useState<string | null>(null);
+  const [iterativePlotHtml, setIterativePlotHtml] = useState<string | null>(null);
   const [currentNetwork, setCurrentNetwork] = useState<string | null>(null);
   const [currentScenario, setCurrentScenario] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -56,6 +57,7 @@ export function DiagnosticLayout() {
             break;
           case 'iterative':
             setFullResponse(prev => ({ ...prev!, iterative: data }));
+            if (data.iterativePlotHtml) setIterativePlotHtml(data.iterativePlotHtml);
             setLoadingStage(null);
             break;
           case 'done':
@@ -77,12 +79,14 @@ export function DiagnosticLayout() {
     setError(null);
     setNlExtra(null);
     setPlotHtml(null);
+    setIterativePlotHtml(null);
     setCurrentNetwork(network);
     setCurrentScenario('nl_generated');
     try {
       const response = await runNLDiagnosis(network, description);
       setNlExtra(response);
       setPlotHtml(response.plotHtml ?? null);
+      setIterativePlotHtml(response.iterativePlotHtml ?? null);
       if (response.generationStatus === 'success') {
         setFullResponse({ baseline: response.baseline, agentic: response.agentic, iterative: response.iterative, plotHtml: response.plotHtml });
       } else {
@@ -116,6 +120,7 @@ export function DiagnosticLayout() {
           iterativeResult={iterativeResult}
           nlExtra={nlExtra}
           plotHtml={plotHtml}
+          iterativePlotHtml={iterativePlotHtml}
           isLoading={isLoading}
           loadingStage={loadingStage}
           error={error}

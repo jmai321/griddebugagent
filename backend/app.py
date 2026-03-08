@@ -684,6 +684,12 @@ def _get_combined_affected_components(net: pp.pandapowerNet, base_components: di
     import copy
     combined = copy.deepcopy(base_components) if base_components else {}
     
+    # Expand empty lists to "all indices" for a type handled by the LLM
+    for comp_type in ["bus", "line", "trafo", "load", "gen", "sgen", "ext_grid"]:
+        if comp_type in combined and not combined[comp_type]:
+            if hasattr(net, comp_type) and getattr(net, comp_type) is not None and not getattr(net, comp_type).empty:
+                combined[comp_type] = getattr(net, comp_type).index.tolist()
+    
     # Try to find voltage violations
     v_min_global, v_max_global = 0.95, 1.05
     if getattr(net, "res_bus", None) is not None and not net.res_bus.empty:
@@ -800,11 +806,20 @@ def run_diagnose(req: DiagnoseRequest):
             "error": str(e),
         }
 
-    # Generate visualization
+
+
+    # Generate visualization for baseline/agentic scenario
     combined_components = _get_combined_affected_components(net, ground_truth.affected_components)
     plot_html = _generate_diagnostic_plot(net, combined_components)
 
-    return DiagnoseResult(baseline=baseline, agentic=agentic, iterative=iterative, plotHtml=plot_html)
+    # Generate visualization for iterative debugger scenario if it ran
+    iterative_plot_html = ""
+    if "net_iter" in locals():
+        # Re-run combined components check on the new network state (no ground truth so it only highlights remaining violations)
+        iter_combined = _get_combined_affected_components(net_iter, {})
+        iterative_plot_html = _generate_diagnostic_plot(net_iter, iter_combined)
+
+    return DiagnoseResult(baseline=baseline, agentic=agentic, iterative=iterative, plotHtml=plot_html, iterativePlotHtml=iterative_plot_html)
 
 
 # ---------------------
@@ -1091,6 +1106,13 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
             "error": str(e),
         }
 
+    # Generate visualization for iterative debugger scenario if it ran
+    iterative_plot_html = ""
+    if "net_iter" in locals():
+        # Do not pass ground_truth to the iterative plot; only highlight remaining violations
+        iter_combined = _get_combined_affected_components(net_iter, {})
+        iterative_plot_html = _generate_diagnostic_plot(net_iter, iter_combined)
+
     return {
         "generationStatus": "success",
         "generationError": None,
@@ -1105,6 +1127,7 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         "agentic": agentic,
         "iterative": iterative,
         "plotHtml": plot_html,
+        "iterativePlotHtml": iterative_plot_html,
         "responseType": response_type,
         "textAnswer": text_answer,
     }

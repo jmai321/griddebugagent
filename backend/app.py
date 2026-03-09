@@ -3,17 +3,13 @@ import re
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
 import pandas as pd
-
-import pandas as pd
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List
 
 import pandapower as pp
-from pandapower.plotting.plotly import simple_plotly, create_bus_trace, create_line_trace, create_trafo_trace
 from scenarios.code_sandbox import execute_safely
 
 from openai import OpenAI
@@ -25,6 +21,7 @@ from scenarios import (
     ContingencyFailureScenarios,
     NormalScenarios,
 )
+from scenarios.base_scenarios import load_network
 from agents.baseline import BaselineAgent
 from agents.agentic_pipeline import AgenticPipelineAgent
 from scenarios.nl_scenario_generator import NLScenarioGenerator
@@ -198,124 +195,133 @@ def _parse_llm_report(report: str) -> dict:
     return result
 
 
+def _parse_affected_component(text: str) -> dict | None:
+    """
+    Parse LLM component strings like:
+    - "Bus 3" -> {"type": "bus", "index": 3}
+    - "Line 5-7" -> {"type": "line", "index": 5}
+    - "Load 0-41" -> {"type": "load", "index": 0}
+    - "Generator 2" -> {"type": "gen", "index": 2}
+    - "Transformer 1" -> {"type": "trafo", "index": 1}
+    """
+    text = text.strip().lower()
+
+    patterns = [
+        (r'bus\s*(\d+)', 'bus'),
+        (r'line\s*(\d+)(?:\s*[-–]\s*\d+)?', 'line'),
+        (r'load\s*(\d+)(?:\s*[-–]\s*\d+)?', 'load'),
+        (r'gen(?:erator)?\s*(\d+)', 'gen'),
+        (r'trafo(?:rmer)?\s*(\d+)', 'trafo'),
+        (r'transformer\s*(\d+)', 'trafo'),
+        (r'ext(?:ernal)?\s*grid\s*(\d+)', 'ext_grid'),
+    ]
+
+    for pattern, comp_type in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return {"type": comp_type, "index": int(match.group(1))}
+
+    return None
+
+
+def _parse_affected_components_list(components: list[str]) -> dict[str, list[int]]:
+    """
+    Parse list of LLM component strings into structured format.
+    Returns: {"bus": [3, 5], "line": [1, 2], ...}
+    """
+    result: dict[str, list[int]] = {}
+
+    for comp_text in components:
+        parsed = _parse_affected_component(comp_text)
+        if parsed:
+            comp_type = parsed["type"]
+            comp_index = parsed["index"]
+            if comp_type not in result:
+                result[comp_type] = []
+            if comp_index not in result[comp_type]:
+                result[comp_type].append(comp_index)
+
+    return result
+
+
 def _build_pipeline_result(report: str, analysis_status: str = "success") -> dict:
     """Build pipeline result with analysisStatus and parsed fields."""
-    print('========================================')
-    print(report)
-    print('========================================')
     parsed = _parse_llm_report(report)
+    parsed_components = _parse_affected_components_list(parsed["affectedComponents"])
     return {
         "analysisStatus": analysis_status,
         "rootCauses": parsed["rootCauses"],
         "affectedComponents": parsed["affectedComponents"],
         "correctiveActions": parsed["correctiveActions"],
+        "parsedAffectedComponents": parsed_components,
     }
 
 
-def _generate_diagnostic_plot(net: pp.pandapowerNet, affected_components: dict) -> str:
+def _generate_bus_coordinates(net: pp.pandapowerNet) -> dict[int, dict[str, float]]:
     """
-    Generate an HTML string with a Plotly visualization of the network,
-    highlighting the affected components in red.
+    Generate hierarchical layout coordinates for buses using BFS from slack bus.
+    Returns {bus_idx: {"x": float, "y": float}}
     """
-    try:
-        # Build additional traces for affected components
-        additional_traces = []
-        
-        # Highlight affected buses (including those from loads and gens)
-        buses_to_highlight = set(affected_components.get("bus", []))
-        
-        if "load" in affected_components and affected_components["load"]:
-            for idx in affected_components["load"]:
-                if idx in net.load.index:
-                    buses_to_highlight.add(net.load.at[idx, "bus"])
-                    
-        if "gen" in affected_components and affected_components["gen"]:
-            for idx in affected_components["gen"]:
-                if idx in net.gen.index:
-                    buses_to_highlight.add(net.gen.at[idx, "bus"])
-                    
-        if "sgen" in affected_components and affected_components["sgen"]:
-            for idx in affected_components["sgen"]:
-                if idx in net.sgen.index:
-                    buses_to_highlight.add(net.sgen.at[idx, "bus"])
+    from collections import deque
 
-        if buses_to_highlight:
-            valid_buses = [b for b in buses_to_highlight if b in net.bus.index]
-            if valid_buses:
-                trace_bus = create_bus_trace(
-                    net,
-                    buses=valid_buses,
-                    color="red",
-                    size=25.0,  # Make it large and obvious
-                    trace_name="Affected Buses/Components",
-                    infofunc=pd.Series(index=valid_buses, data=[f"Affected Component at Bus {b}" for b in valid_buses])
-                )
-                additional_traces.extend(trace_bus)
-                
-        # Highlight affected lines
-        if "line" in affected_components and affected_components["line"]:
-            lines_to_highlight = set(affected_components["line"])
-            valid_lines = [l for l in lines_to_highlight if l in net.line.index]
-            if valid_lines:
-                trace_line = create_line_trace(
-                    net,
-                    lines=valid_lines,
-                    color="red",
-                    width=4.0,
-                    trace_name="Affected Lines",
-                    infofunc=pd.Series(index=valid_lines, data=[f"Affected Line {l}" for l in valid_lines])
-                )
-                additional_traces.extend(trace_line)
+    coords: dict[int, dict[str, float]] = {}
+    bus_indices = list(net.bus.index)
+    if not bus_indices:
+        return coords
 
-        # Highlight affected trafos
-        if "trafo" in affected_components and affected_components["trafo"]:
-            trafos_to_highlight = set(affected_components["trafo"])
-            valid_trafos = [t for t in trafos_to_highlight if t in net.trafo.index]
-            if valid_trafos:
-                trace_trafo = create_trafo_trace(
-                    net,
-                    trafos=valid_trafos,
-                    color="red",
-                    width=4.0,
-                    trace_name="Affected Transformers"
-                )
-                additional_traces.extend(trace_trafo)
+    # Build adjacency list from lines and transformers
+    adjacency: dict[int, list[int]] = {b: [] for b in bus_indices}
 
-        # Draw all generators (gen, sgen, ext_grid) regardless of whether they are affected
-        # This ensures they are always visible on the map.
-        if hasattr(net, 'ext_grid') and not net.ext_grid.empty:
-            additional_traces.extend(create_bus_trace(net, buses=net.ext_grid.bus.tolist(), size=20.0, color="yellow", trace_name="External Grid"))
-            
-        if hasattr(net, 'gen') and not net.gen.empty:
-            additional_traces.extend(create_bus_trace(net, buses=net.gen.bus.tolist(), size=15.0, color="orange", trace_name="Generators"))
-            
-        if hasattr(net, 'sgen') and not net.sgen.empty:
-            additional_traces.extend(create_bus_trace(net, buses=net.sgen.bus.tolist(), size=15.0, color="goldenrod", trace_name="Static Generators"))
+    for _, line in net.line.iterrows():
+        from_bus, to_bus = int(line["from_bus"]), int(line["to_bus"])
+        if from_bus in adjacency and to_bus in adjacency:
+            adjacency[from_bus].append(to_bus)
+            adjacency[to_bus].append(from_bus)
 
-        # Create a deep copy of the network to temporarily modify bus names for plotting
-        import copy
-        plot_net = copy.deepcopy(net)
-        
-        # Override the 'name' column of buses to explicitly equal the DataFrame index as a string
-        # simple_plotly relies on the 'name' column by default to render hover text
-        plot_net.bus['name'] = [f"{idx}" for idx in plot_net.bus.index]
+    if hasattr(net, 'trafo') and not net.trafo.empty:
+        for _, trafo in net.trafo.iterrows():
+            hv_bus, lv_bus = int(trafo["hv_bus"]), int(trafo["lv_bus"])
+            if hv_bus in adjacency and lv_bus in adjacency:
+                adjacency[hv_bus].append(lv_bus)
+                adjacency[lv_bus].append(hv_bus)
 
-        # Create the base plot with the additional highlight traces
-        fig = simple_plotly(
-            plot_net,
-            additional_traces=additional_traces,
-            auto_open=False
-        )
-        
-        # Add legend if there are custom traces
-        if additional_traces:
-            fig.update_layout(showlegend=True)
-            
-        return fig.to_html(include_plotlyjs="cdn", full_html=True)
+    # Find starting bus (prefer external grid, then first generator, then bus 0)
+    start_bus = bus_indices[0]
+    if hasattr(net, 'ext_grid') and not net.ext_grid.empty:
+        start_bus = int(net.ext_grid.iloc[0]["bus"])
+    elif hasattr(net, 'gen') and not net.gen.empty:
+        start_bus = int(net.gen.iloc[0]["bus"])
 
-    except Exception as e:
-        print(f"Failed to generate diagnostic plot: {e}")
-        return "<p>Failed to generate visualization.</p>"
+    # BFS to assign layers
+    visited: set[int] = set()
+    layers: dict[int, list[int]] = {}
+    queue: deque[tuple[int, int]] = deque([(start_bus, 0)])
+    visited.add(start_bus)
+
+    while queue:
+        bus, layer = queue.popleft()
+        layers.setdefault(layer, []).append(bus)
+        for neighbor in adjacency[bus]:
+            if neighbor not in visited:
+                visited.add(neighbor)
+                queue.append((neighbor, layer + 1))
+
+    # Handle disconnected buses
+    for bus in bus_indices:
+        if bus not in visited:
+            max_layer = max(layers.keys()) + 1 if layers else 0
+            layers.setdefault(max_layer, []).append(bus)
+
+    # Assign coordinates: x = layer, y = position within layer
+    x_spacing = 150
+    y_spacing = 100
+
+    for layer, buses in layers.items():
+        for i, bus in enumerate(buses):
+            y_offset = (i - len(buses) / 2) * y_spacing
+            coords[bus] = {"x": float(layer * x_spacing), "y": float(y_offset)}
+
+    return coords
 
 
 # ---------------------
@@ -333,7 +339,6 @@ class DiagnoseResult(BaseModel):
     """Response body returned by the /diagnose endpoint."""
     baseline: dict
     agentic: dict
-    plotHtml: str = ""
 
 
 class DiagnoseNLRequest(BaseModel):
@@ -345,11 +350,81 @@ class DiagnoseNLRequest(BaseModel):
 class OverrideState(BaseModel):
     """State of manual network overrides from the frontend control board."""
     globalLoadScale: float = 1.0  # multiplier for all loads
-    lineOutages: List[int] = []   # list of line indices to set in_service=False
-    trafoOutages: List[int] = []  # list of trafo indices to set in_service=False
-    loadOverrides: Dict[int, Dict[str, float]] = {} # e.g., {idx: {"p_mw": 50.0, "q_mvar": 20.0, "in_service": 1.0/0.0}}
-    genOverrides: Dict[int, Dict[str, float]] = {}  # e.g., {idx: {"p_mw": 100.0, "vm_pu": 1.02, "in_service": 1.0/0.0}}
-    extGridOverrides: Dict[int, Dict[str, float]] = {} # e.g., {idx: {"vm_pu": 1.02, "in_service": 1.0/0.0}}
+    # In-service state maps (boolean only)
+    lineStates: Dict[int, bool] = {}
+    trafoStates: Dict[int, bool] = {}
+    genStates: Dict[int, bool] = {}
+    loadStates: Dict[int, bool] = {}
+    extGridStates: Dict[int, bool] = {}
+    # Value overrides (numeric properties)
+    loadValues: Dict[int, Dict[str, float]] = {}   # e.g., {idx: {"p_mw": 50.0, "q_mvar": 20.0}}
+    genValues: Dict[int, Dict[str, float]] = {}    # e.g., {idx: {"p_mw": 100.0, "vm_pu": 1.02}}
+    extGridValues: Dict[int, Dict[str, float]] = {} # e.g., {idx: {"vm_pu": 1.02}}
+
+
+def _apply_overrides(net: pp.pandapowerNet, overrides: OverrideState) -> None:
+    """Apply manual overrides to a pandapower network (mutates net in place)."""
+    # Global load scale
+    if overrides.globalLoadScale != 1.0:
+        if not net.load.empty and "p_mw" in net.load.columns:
+            net.load["p_mw"] *= overrides.globalLoadScale
+        if not net.load.empty and "q_mvar" in net.load.columns:
+            net.load["q_mvar"] *= overrides.globalLoadScale
+
+    # Line states (in_service)
+    for idx_str, in_service in overrides.lineStates.items():
+        idx = int(idx_str)
+        if idx in net.line.index:
+            net.line.at[idx, "in_service"] = in_service
+
+    # Trafo states (in_service)
+    for idx_str, in_service in overrides.trafoStates.items():
+        idx = int(idx_str)
+        if idx in net.trafo.index:
+            net.trafo.at[idx, "in_service"] = in_service
+
+    # Gen states (in_service)
+    for idx_str, in_service in overrides.genStates.items():
+        idx = int(idx_str)
+        if idx in net.gen.index:
+            net.gen.at[idx, "in_service"] = in_service
+
+    # Gen values (p_mw, vm_pu)
+    for idx_str, values in overrides.genValues.items():
+        idx = int(idx_str)
+        if idx in net.gen.index:
+            if "p_mw" in values:
+                net.gen.at[idx, "p_mw"] = values["p_mw"]
+            if "vm_pu" in values:
+                net.gen.at[idx, "vm_pu"] = values["vm_pu"]
+
+    # Load states (in_service)
+    for idx_str, in_service in overrides.loadStates.items():
+        idx = int(idx_str)
+        if idx in net.load.index:
+            net.load.at[idx, "in_service"] = in_service
+
+    # Load values (p_mw, q_mvar)
+    for idx_str, values in overrides.loadValues.items():
+        idx = int(idx_str)
+        if idx in net.load.index:
+            if "p_mw" in values:
+                net.load.at[idx, "p_mw"] = values["p_mw"]
+            if "q_mvar" in values:
+                net.load.at[idx, "q_mvar"] = values["q_mvar"]
+
+    # Ext grid states (in_service)
+    for idx_str, in_service in overrides.extGridStates.items():
+        idx = int(idx_str)
+        if getattr(net, "ext_grid", None) is not None and idx in net.ext_grid.index:
+            net.ext_grid.at[idx, "in_service"] = in_service
+
+    # Ext grid values (vm_pu)
+    for idx_str, values in overrides.extGridValues.items():
+        idx = int(idx_str)
+        if getattr(net, "ext_grid", None) is not None and idx in net.ext_grid.index:
+            if "vm_pu" in values:
+                net.ext_grid.at[idx, "vm_pu"] = values["vm_pu"]
 
 
 class SimulateOverridesRequest(BaseModel):
@@ -358,6 +433,7 @@ class SimulateOverridesRequest(BaseModel):
     scenario: str
     generatedCode: Optional[str] = None
     overrides: OverrideState
+    llmAffectedComponents: Optional[Dict[str, List[int]]] = None
 
 
 class NetworkStateRequest(BaseModel):
@@ -365,6 +441,15 @@ class NetworkStateRequest(BaseModel):
     network: str = "case14"
     scenario: str
     generatedCode: Optional[str] = None
+    llmAffectedComponents: Optional[Dict[str, List[int]]] = None
+
+
+class ReDiagnoseRequest(BaseModel):
+    """Request body for re-diagnosing with overrides applied."""
+    network: str = "case14"
+    scenario: str
+    generatedCode: Optional[str] = None
+    overrides: OverrideState
 
 
 
@@ -390,33 +475,6 @@ def get_scenarios():
 
 
 # ---------------------
-#  GET  /api/visualize
-# ---------------------
-
-@app.get("/api/visualize/{network}/{scenario}", response_class=HTMLResponse)
-def get_visualization(network: str, scenario: str):
-    """
-    Generate an interactive Plotly HTML visualization of the power network
-    for a given scenario to verify testcases visually.
-    """
-    try:
-        from pandapower.plotting.plotly import simple_plotly
-    except ImportError:
-        return HTMLResponse("Plotly is not installed. Run `pip install plotly matplotlib`", status_code=500)
-    
-    # Apply the scenario to get a modified network
-    scenario_obj, _ = _find_and_apply_scenario(scenario, network)
-    net = scenario_obj.net
-    
-    try:
-        fig = simple_plotly(net)
-        html_content = fig.to_html(include_plotlyjs="cdn", full_html=True)
-        return HTMLResponse(content=html_content)
-    except Exception as e:
-        return HTMLResponse(content=f"Error generating plot: {e}", status_code=500)
-
-
-# ---------------------
 #  POST /api/network_state
 # ---------------------
 
@@ -426,29 +484,44 @@ def get_network_state(req: NetworkStateRequest):
     Return the raw network components data (buses, lines, generators)
     for a specific scenario (or generated NLP code).
     """
-    scenario_obj, _ = _find_and_apply_scenario(req.scenario, req.network)
-    net = scenario_obj.net
+    # Handle NL-generated scenarios specially (not in SCENARIOS list)
+    if req.scenario == "nl_generated" or req.scenario is None:
+        net = load_network(req.network)
+    else:
+        scenario_obj, _ = _find_and_apply_scenario(req.scenario, req.network)
+        net = scenario_obj.net
 
-    # If it's an NLP-generated scenario, we need to apply the generated code
+    # If it's an NLP-generated scenario, apply the generated code
     if req.generatedCode:
         execute_safely(req.generatedCode, net, timeout=5)
 
     # Try running power flow to get res_bus and res_line if possible
+    converged = False
     try:
         pp.runpp(net)
+        converged = getattr(net, "converged", False)
     except Exception:
         pass
-    
-    # Convert DataFrames to dicts, handling NaNs
+
+    # Generate bus coordinates for visualization
+    bus_coords = _generate_bus_coordinates(net)
+
+    # Use LLM-identified affected components (if provided), not math-based
+    affected_components = req.llmAffectedComponents or {}
+
+    # Convert DataFrames to dicts (index-keyed for frontend compatibility)
     return {
-        "bus": json.loads(net.bus.to_json(orient="records")),
-        "line": json.loads(net.line.to_json(orient="records")),
-        "load": json.loads(net.load.to_json(orient="records")) if getattr(net, "load", None) is not None and not net.load.empty else [],
-        "gen": json.loads(net.gen.to_json(orient="records")) if getattr(net, "gen", None) is not None and not net.gen.empty else [],
-        "trafo": json.loads(net.trafo.to_json(orient="records")) if getattr(net, "trafo", None) is not None and not net.trafo.empty else [],
-        "ext_grid": json.loads(net.ext_grid.to_json(orient="records")) if getattr(net, "ext_grid", None) is not None and not net.ext_grid.empty else [],
-        "res_bus": json.loads(net.res_bus.to_json(orient="records")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else [],
-        "res_line": json.loads(net.res_line.to_json(orient="records")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else [],
+        "bus": json.loads(net.bus.to_json(orient="index")),
+        "line": json.loads(net.line.to_json(orient="index")),
+        "load": json.loads(net.load.to_json(orient="index")) if getattr(net, "load", None) is not None and not net.load.empty else {},
+        "gen": json.loads(net.gen.to_json(orient="index")) if getattr(net, "gen", None) is not None and not net.gen.empty else {},
+        "trafo": json.loads(net.trafo.to_json(orient="index")) if getattr(net, "trafo", None) is not None and not net.trafo.empty else {},
+        "ext_grid": json.loads(net.ext_grid.to_json(orient="index")) if getattr(net, "ext_grid", None) is not None and not net.ext_grid.empty else {},
+        "res_bus": json.loads(net.res_bus.to_json(orient="index")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else {},
+        "res_line": json.loads(net.res_line.to_json(orient="index")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else {},
+        "bus_coords": bus_coords,
+        "affected_components": affected_components,
+        "converged": converged,
     }
 
 # ---------------------
@@ -459,62 +532,20 @@ def get_network_state(req: NetworkStateRequest):
 def run_simulate_overrides(req: SimulateOverridesRequest):
     """
     Apply manual user overrides (sliders/toggles) to a base network scenario,
-    run the power flow, and return the new plot HTML and status.
+    run the power flow, and return the updated network state.
     """
-    scenario_obj, _ = _find_and_apply_scenario(req.scenario, req.network)
-    net = scenario_obj.net
+    # Handle NL-generated scenarios specially (not in SCENARIOS list)
+    if req.scenario == "nl_generated" or req.scenario is None:
+        net = load_network(req.network)
+    else:
+        scenario_obj, _ = _find_and_apply_scenario(req.scenario, req.network)
+        net = scenario_obj.net
 
     if req.generatedCode:
         execute_safely(req.generatedCode, net, timeout=5)
 
-    # Apply manual overrides
-    overrides = req.overrides
-
-    # Global scale
-    if overrides.globalLoadScale != 1.0:
-        if not net.load.empty and "p_mw" in net.load.columns:
-            net.load["p_mw"] *= overrides.globalLoadScale
-        if not net.load.empty and "q_mvar" in net.load.columns:
-            net.load["q_mvar"] *= overrides.globalLoadScale
-
-    # Line outages
-    for idx in overrides.lineOutages:
-        if idx in net.line.index:
-            net.line.at[idx, "in_service"] = False
-
-    # Trafo outages
-    for idx in overrides.trafoOutages:
-        if idx in net.trafo.index:
-            net.trafo.at[idx, "in_service"] = False
-
-    # Ext grid overrides
-    for idx_str, values in overrides.extGridOverrides.items():
-        idx = int(idx_str)
-        if getattr(net, "ext_grid", None) is not None and idx in net.ext_grid.index:
-            for k, v in values.items():
-                net.ext_grid.at[idx, k] = v
-
-    # Load overrides
-    for idx_str, values in overrides.loadOverrides.items():
-        idx = int(idx_str)
-        if idx in net.load.index:
-            if "p_mw" in values:
-                net.load.at[idx, "p_mw"] = values["p_mw"]
-            if "q_mvar" in values:
-                net.load.at[idx, "q_mvar"] = values["q_mvar"]
-            if "in_service" in values:
-                net.load.at[idx, "in_service"] = bool(values["in_service"])
-
-    # Gen overrides
-    for idx_str, values in overrides.genOverrides.items():
-        idx = int(idx_str)
-        if idx in net.gen.index:
-            if "p_mw" in values:
-                net.gen.at[idx, "p_mw"] = values["p_mw"]
-            if "vm_pu" in values:
-                net.gen.at[idx, "vm_pu"] = values["vm_pu"]
-            if "in_service" in values:
-                net.gen.at[idx, "in_service"] = bool(values["in_service"])
+    # Apply manual overrides using helper
+    _apply_overrides(net, req.overrides)
 
     # Run power flow
     converged = False
@@ -524,67 +555,88 @@ def run_simulate_overrides(req: SimulateOverridesRequest):
     except Exception:
         pass
 
-    # Basic root cause string if it failed
-    root_causes = []
-    affected_components = {}
-    if not converged:
-        root_causes.append("**Non-convergence**: Power flow failed with the current manual overrides.")
-    else:
-        v_min_global, v_max_global = 0.95, 1.05
-        if not net.res_bus.empty:
-            has_voltage_issues = False
-            for idx, row in net.res_bus.iterrows():
-                b_min = net.bus.at[idx, "min_vm_pu"] if "min_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "min_vm_pu"]) else v_min_global
-                b_max = net.bus.at[idx, "max_vm_pu"] if "max_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "max_vm_pu"]) else v_max_global
-                
-                if row["vm_pu"] < b_min or row["vm_pu"] > b_max:
-                    has_voltage_issues = True
-                    affected_components.setdefault("bus", []).append(int(idx))
-            
-            if has_voltage_issues:
-                root_causes.append("**Voltage Violations**: Buses found outside their specific voltage bounds.")
-        
-        if not net.res_line.empty:
-            ol = net.res_line[net.res_line["loading_percent"] > 100].index.tolist()
-            if ol:
-                root_causes.append("**Thermal Overloads**: Lines loaded above 100%.")
-                affected_components["line"] = ol
+    # Generate bus coordinates for visualization
+    bus_coords = _generate_bus_coordinates(net)
 
-    plot_html = _generate_diagnostic_plot(net, affected_components)
+    # Use LLM-identified affected components (if provided)
+    affected_components = req.llmAffectedComponents or {}
 
+    # Return full network state (same structure as /api/network_state)
     return {
+        "bus": json.loads(net.bus.to_json(orient="index")),
+        "line": json.loads(net.line.to_json(orient="index")),
+        "load": json.loads(net.load.to_json(orient="index")) if getattr(net, "load", None) is not None and not net.load.empty else {},
+        "gen": json.loads(net.gen.to_json(orient="index")) if getattr(net, "gen", None) is not None and not net.gen.empty else {},
+        "trafo": json.loads(net.trafo.to_json(orient="index")) if getattr(net, "trafo", None) is not None and not net.trafo.empty else {},
+        "ext_grid": json.loads(net.ext_grid.to_json(orient="index")) if getattr(net, "ext_grid", None) is not None and not net.ext_grid.empty else {},
+        "res_bus": json.loads(net.res_bus.to_json(orient="index")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else {},
+        "res_line": json.loads(net.res_line.to_json(orient="index")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else {},
+        "bus_coords": bus_coords,
+        "affected_components": affected_components,
         "converged": converged,
-        "plotHtml": plot_html,
-        "rootCauses": root_causes,
     }
 
 
-def _get_combined_affected_components(net: pp.pandapowerNet, base_components: dict = None) -> dict:
-    """Merge predefined affected components with dynamically found violations."""
-    import copy
-    combined = copy.deepcopy(base_components) if base_components else {}
-    
-    # Try to find voltage violations
-    v_min_global, v_max_global = 0.95, 1.05
-    if getattr(net, "res_bus", None) is not None and not net.res_bus.empty:
-        for idx, row in net.res_bus.iterrows():
-            b_min = net.bus.at[idx, "min_vm_pu"] if "min_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "min_vm_pu"]) else v_min_global
-            b_max = net.bus.at[idx, "max_vm_pu"] if "max_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "max_vm_pu"]) else v_max_global
-            
-            if row["vm_pu"] < b_min or row["vm_pu"] > b_max:
-                combined.setdefault("bus", []).append(int(idx))
-                
-    if "bus" in combined:
-        combined["bus"] = list(set(combined["bus"]))
-        
-    # Try to find thermal overloads
-    if getattr(net, "res_line", None) is not None and not net.res_line.empty:
-        ol = net.res_line[net.res_line["loading_percent"] > 100].index.tolist()
-        if ol:
-            combined.setdefault("line", []).extend(ol)
-            combined["line"] = list(set(combined["line"]))
-            
-    return combined
+# ---------------------
+#  POST /api/rediagnose
+# ---------------------
+
+@app.post("/api/rediagnose")
+def run_rediagnose(req: ReDiagnoseRequest):
+    """
+    Re-run LLM diagnosis on a network with manual overrides applied.
+    Returns same structure as /diagnose.
+    """
+    print(f"[REDIAGNOSE] Received overrides: {req.overrides}")
+    # Load base network
+    if req.scenario == "nl_generated" or req.scenario is None:
+        net = load_network(req.network)
+    else:
+        scenario_obj, _ = _find_and_apply_scenario(req.scenario, req.network)
+        net = scenario_obj.net
+
+    # Apply generated code if present
+    if req.generatedCode:
+        execute_safely(req.generatedCode, net, timeout=5)
+
+    # Apply manual overrides using helper
+    _apply_overrides(net, req.overrides)
+
+    # Debug: show gen state after overrides
+    print(f"[REDIAGNOSE] Gen table after overrides:\n{net.gen[['bus', 'p_mw', 'vm_pu', 'in_service']]}")
+
+    # Run power flow
+    try:
+        pp.runpp(net)
+        print(f"[REDIAGNOSE] Power flow converged: {net.converged}")
+    except Exception as e:
+        print(f"[REDIAGNOSE] Power flow failed: {e}")
+
+    # Run both diagnosis pipelines
+    baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
+    baseline_report = baseline_result["response"]
+    baseline_status = "success" if not baseline_report.startswith("LLM call failed") else "error"
+    baseline = _build_pipeline_result(baseline_report, baseline_status)
+
+    try:
+        agentic_result = _agentic_agent.diagnose(net, network_name=req.network)
+        agentic_report = agentic_result["response"]
+        agentic_status = "success"
+        if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
+            agentic_status = "error"
+        agentic = _build_pipeline_result(agentic_report, agentic_status)
+        agentic["tool_calls"] = agentic_result.get("tool_calls", [])
+        agentic["conversation"] = agentic_result.get("conversation", [])
+    except Exception:
+        agentic = {
+            "analysisStatus": "error",
+            "rootCauses": [],
+            "affectedComponents": [],
+            "correctiveActions": [],
+            "parsedAffectedComponents": {},
+        }
+
+    return {"baseline": baseline, "agentic": agentic}
 
 
 # ---------------------
@@ -635,11 +687,7 @@ def run_diagnose(req: DiagnoseRequest):
             "correctiveActions": [],
         }
 
-    # Generate visualization
-    combined_components = _get_combined_affected_components(net, ground_truth.affected_components)
-    plot_html = _generate_diagnostic_plot(net, combined_components)
-
-    return DiagnoseResult(baseline=baseline, agentic=agentic, plotHtml=plot_html)
+    return DiagnoseResult(baseline=baseline, agentic=agentic)
 
 
 # ---------------------
@@ -711,19 +759,15 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
             },
             "baseline": {"analysisStatus": "skipped", "rootCauses": [], "affectedComponents": [], "correctiveActions": []},
             "agentic": {"analysisStatus": "skipped", "rootCauses": [], "affectedComponents": [], "correctiveActions": []},
-            "plotHtml": "",
             "responseType": response_type,
             "textAnswer": text_answer,
         }
 
-    # For plot-only or full-diagnosis, we run power flow and generate the plot
+    # For plot-only or full-diagnosis, we run power flow
     try:
         pp.runpp(net)
     except Exception:
         pass
-
-    combined_components = _get_combined_affected_components(net, ground_truth.affected_components)
-    plot_html = _generate_diagnostic_plot(net, combined_components)
 
     # For plot-only, skip the LLM diagnosis
     if response_type == "plot_only":
@@ -739,7 +783,6 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
             },
             "baseline": {"analysisStatus": "skipped", "rootCauses": [], "affectedComponents": [], "correctiveActions": []},
             "agentic": {"analysisStatus": "skipped", "rootCauses": [], "affectedComponents": [], "correctiveActions": []},
-            "plotHtml": plot_html,
             "responseType": response_type,
             "textAnswer": text_answer,
         }
@@ -782,26 +825,8 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         },
         "baseline": baseline,
         "agentic": agentic,
-        "plotHtml": plot_html,
         "responseType": response_type,
         "textAnswer": text_answer,
-    }
-
-
-# ---------------------
-#  GET  /result/{scenario}
-# ---------------------
-
-@app.get("/result/{scenario}")
-def get_result(scenario: str, network: str = "case14"):
-    """
-    Retrieve the latest diagnosis text output for a given scenario + network.
-    TODO: fetch stored result from database/cache.
-    """
-    return {
-        "network": network,
-        "scenario": scenario,
-        "report": "",
     }
 
 

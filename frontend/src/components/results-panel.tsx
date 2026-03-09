@@ -3,11 +3,13 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PipelineResult, PipelineId, DiagnoseNLResponse } from '@/types/diagnostic';
-import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp } from 'lucide-react';
+import { AlertCircle, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { NetworkControlBoard } from './network-control-board';
-import { OverrideState, RawNetworkState } from '@/types/diagnostic';
+import { NetworkGraph } from './network-graph';
+import { OverrideState, RawNetworkState, DiagnoseResponse } from '@/types/diagnostic';
+import { API_BASE, runReDiagnosis } from '@/lib/api';
 
 const PIPELINE_LABELS: Record<PipelineId, string> = {
   baseline: 'Baseline (LLM only)',
@@ -18,81 +20,84 @@ interface ResultsPanelProps {
   result: PipelineResult | null;
   selectedPipeline: PipelineId;
   nlExtra: DiagnoseNLResponse | null;
-  plotHtml: string | null;
   isLoading: boolean;
   error: string | null;
   networkName: string | null;
   scenarioName: string | null;
+  onDiagnosisUpdate?: (response: DiagnoseResponse) => void;
 }
 
-export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: initialPlotHtml, isLoading, error, networkName, scenarioName }: ResultsPanelProps) {
+export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, error, networkName, scenarioName, onDiagnosisUpdate }: ResultsPanelProps) {
   const [codeExpanded, setCodeExpanded] = useState(false);
-  const [plotHtml, setPlotHtml] = useState<string | null>(initialPlotHtml);
   const [networkState, setNetworkState] = useState<RawNetworkState | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isReDiagnosing, setIsReDiagnosing] = useState(false);
+  const [lastSimulationConverged, setLastSimulationConverged] = useState<boolean | null>(null);
 
-  // Keep plotHtml synced with the prop when it changes
-  useEffect(() => {
-    setPlotHtml(initialPlotHtml);
-  }, [initialPlotHtml]);
+  // Fetch network state helper
+  const fetchNetworkState = useCallback(async (overrides?: OverrideState) => {
+    if (!networkName) return;
+
+    // Get LLM-parsed affected components for highlighting
+    const llmAffectedComponents = result?.parsedAffectedComponents || null;
+
+    try {
+      const endpoint = overrides ? `${API_BASE}/api/simulate_overrides` : `${API_BASE}/api/network_state`;
+      const body = overrides
+        ? { network: networkName, scenario: scenarioName || 'normal_operation', generatedCode: nlExtra?.generatedCode || null, overrides, llmAffectedComponents }
+        : { network: networkName, scenario: scenarioName || 'normal_operation', generatedCode: nlExtra?.generatedCode || null, llmAffectedComponents };
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setNetworkState(data);
+        // Track convergence status when simulating with overrides
+        if (overrides) {
+          setLastSimulationConverged(data.converged ?? false);
+        }
+      }
+    } catch {
+      console.error("Failed to fetch network state");
+    }
+  }, [networkName, scenarioName, nlExtra?.generatedCode, result?.parsedAffectedComponents]);
 
   // Fetch the raw network state when a valid scenario result is loaded
   useEffect(() => {
-    async function fetchNetworkState() {
-      if (!result && !initialPlotHtml) return;
-
-      try {
-        // We need the selected network and scenario.
-        // Assuming we can extract it from the generated code or just pass the props down.
-        // Currently, ResultsPanelProps doesn't have `networkName` or `scenarioName`.
-        // We will mock case14/normal_operation if missing, but ideally we should pass these props.
-        // For NL mode, `nlExtra.generatedCode` is used to load the state.
-        const res = await fetch('http://localhost:8000/api/network_state', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            network: networkName || 'case14',
-            scenario: scenarioName || 'normal_operation',
-            generatedCode: nlExtra?.generatedCode || null
-          })
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setNetworkState(data);
-        }
-      } catch (err) {
-        console.error("Failed to fetch network state:", err);
-      }
-    }
-
-    // Only fetch if we are not currently loading the main analysis
-    if (!isLoading && (result || nlExtra || initialPlotHtml)) {
+    if (!isLoading && (result || nlExtra) && networkName) {
       fetchNetworkState();
     }
-  }, [isLoading, result, nlExtra, initialPlotHtml]);
+  }, [isLoading, result, nlExtra, networkName, fetchNetworkState]);
 
   const handleApplyOverrides = async (overrides: OverrideState) => {
     setIsSimulating(true);
     try {
-      const res = await fetch('http://localhost:8000/api/simulate_overrides', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          network: networkName || 'case14',
-          scenario: scenarioName || 'normal_operation',
-          generatedCode: nlExtra?.generatedCode || null,
-          overrides
-        })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setPlotHtml(data.plotHtml);
-        // Optionally, we could update rootCauses locally here if data.rootCauses exists
-      }
-    } catch (err) {
-      console.error("Simulation failed:", err);
+      await fetchNetworkState(overrides);
     } finally {
       setIsSimulating(false);
+    }
+  };
+
+  const handleReDiagnose = async (overrides: OverrideState) => {
+    if (!networkName || !onDiagnosisUpdate) return;
+
+    setIsReDiagnosing(true);
+    try {
+      const response = await runReDiagnosis(
+        networkName,
+        scenarioName || 'normal_operation',
+        overrides,
+        nlExtra?.generatedCode || null
+      );
+      onDiagnosisUpdate(response);
+    } catch (err) {
+      console.error("Re-diagnosis failed:", err);
+    } finally {
+      setIsReDiagnosing(false);
     }
   };
 
@@ -132,17 +137,9 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
           <h2 className="text-xl font-semibold">Diagnostic Results</h2>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="font-normal">
-              {PIPELINE_LABELS[selectedPipeline]}
-            </Badge>
-            <Badge
-              className={`flex items-center gap-1 ${result.analysisStatus === 'success' ? 'bg-success text-white' : result.analysisStatus === 'not_implemented' ? 'bg-muted text-muted-foreground' : 'bg-destructive text-white'}`}
-            >
-              <CheckCircle2 className="h-3 w-3" />
-              {result.analysisStatus}
-            </Badge>
-          </div>
+          <Badge variant="outline" className="font-normal">
+            {PIPELINE_LABELS[selectedPipeline]}
+          </Badge>
         </div>
       </div>
 
@@ -162,27 +159,23 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
         )}
 
         {/* Network Visualization and Control Board */}
-        {plotHtml && (!nlExtra || nlExtra.responseType !== 'text_only') && (
+        {networkState && (!nlExtra || nlExtra.responseType !== 'text_only') && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Card className="lg:col-span-2">
               <CardHeader className="pb-2">
                 <CardTitle className="text-lg">Network Visualization</CardTitle>
-                <CardDescription>Interactive plot with affected components highlighted</CardDescription>
+                <CardDescription>
+                  Interactive graph with affected components highlighted
+                  {networkState.converged === false && (
+                    <span className="ml-2 text-destructive">(Power flow did not converge)</span>
+                  )}
+                </CardDescription>
               </CardHeader>
-              <CardContent className="p-0 h-[500px]">
-                {isSimulating ? (
-                  <div className="flex flex-col items-center justify-center h-full bg-muted/20">
-                    <Loader2 className="h-8 w-8 text-primary animate-spin mb-4" />
-                    <p className="text-sm text-muted-foreground">Simulating network overrides...</p>
-                  </div>
-                ) : (
-                  <iframe
-                    srcDoc={plotHtml}
-                    className="w-full h-full border-0 rounded-b-lg"
-                    title="Network Visualization"
-                    sandbox="allow-scripts"
-                  />
-                )}
+              <CardContent className="p-0 h-[500px] relative">
+                <NetworkGraph
+                  networkState={networkState}
+                  isLoading={isSimulating}
+                />
               </CardContent>
             </Card>
 
@@ -190,7 +183,10 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, plotHtml: init
               <NetworkControlBoard
                 networkState={networkState}
                 onApplyOverrides={handleApplyOverrides}
+                onReDiagnose={handleReDiagnose}
                 isLoading={isSimulating}
+                isReDiagnosing={isReDiagnosing}
+                lastSimulationConverged={lastSimulationConverged}
               />
             </div>
           </div>

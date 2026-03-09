@@ -7,86 +7,108 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
-import { OverrideState, RawNetworkState } from '@/types/diagnostic';
-import { RefreshCcw, Play } from 'lucide-react';
+import { OverrideState, RawNetworkState, LoadValues, GenValues, ExtGridValues } from '@/types/diagnostic';
+import { RefreshCcw, Play, Loader2, Stethoscope } from 'lucide-react';
 
 interface NetworkControlBoardProps {
     networkState: RawNetworkState | null;
-    onApplyOverrides: (overrides: OverrideState) => void;
+    onApplyOverrides: (overrides: OverrideState) => Promise<void>;
+    onReDiagnose: (overrides: OverrideState) => void;
     isLoading: boolean;
+    isReDiagnosing: boolean;
+    lastSimulationConverged: boolean | null;
 }
 
 const DEFAULT_OVERRIDES: OverrideState = {
     globalLoadScale: 1.0,
-    lineOutages: [],
-    trafoOutages: [],
-    loadOverrides: {},
-    genOverrides: {},
-    extGridOverrides: {},
+    lineStates: {},
+    trafoStates: {},
+    genStates: {},
+    loadStates: {},
+    extGridStates: {},
+    loadValues: {},
+    genValues: {},
+    extGridValues: {},
 };
 
-export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading }: NetworkControlBoardProps) {
+export function NetworkControlBoard({ networkState, onApplyOverrides, onReDiagnose, isLoading, isReDiagnosing, lastSimulationConverged }: NetworkControlBoardProps) {
     const [overrides, setOverrides] = useState<OverrideState>(DEFAULT_OVERRIDES);
 
     const handleGlobalScaleChange = (value: number[]) => {
         setOverrides(prev => ({ ...prev, globalLoadScale: value[0] }));
     };
 
-    const toggleLineOutage = (index: number, initiallyInService: boolean) => {
+    const setLineState = (index: number, inService: boolean) => {
         setOverrides(prev => {
-            const isCurrentlyOutaged = prev.lineOutages.includes(index) ? initiallyInService : !initiallyInService;
-
-            const newLineOutages = prev.lineOutages.includes(index)
-                ? prev.lineOutages.filter(i => i !== index)
-                : [...prev.lineOutages, index];
-            return { ...prev, lineOutages: newLineOutages };
+            const newLineStates = { ...prev.lineStates, [index]: inService };
+            return { ...prev, lineStates: newLineStates };
         });
     };
 
-    const updateLoadOverride = (index: number, field: 'p_mw' | 'q_mvar' | 'in_service', value: string | boolean) => {
-        const parsedValue = typeof value === 'boolean' ? value : parseFloat(value);
-        if (typeof parsedValue === 'number' && isNaN(parsedValue)) return;
+    // Gen state (in_service only)
+    const setGenState = (index: number, inService: boolean) => {
+        setOverrides(prev => ({
+            ...prev,
+            genStates: { ...prev.genStates, [index]: inService }
+        }));
+    };
 
+    // Gen values (p_mw, vm_pu)
+    const updateGenValue = (index: number, field: keyof GenValues, value: string) => {
+        const numValue = parseFloat(value);
+        if (isNaN(numValue)) return;
         setOverrides(prev => {
-            const currentLoadOverrides = { ...prev.loadOverrides };
-            if (!currentLoadOverrides[index]) currentLoadOverrides[index] = {};
-            currentLoadOverrides[index][field] = parsedValue as any;
-            return { ...prev, loadOverrides: currentLoadOverrides };
+            const currentValues = { ...prev.genValues };
+            if (!currentValues[index]) currentValues[index] = {};
+            currentValues[index][field] = numValue;
+            return { ...prev, genValues: currentValues };
         });
     };
 
-    const updateGenOverride = (index: number, field: 'p_mw' | 'vm_pu' | 'in_service', value: string | boolean) => {
-        const parsedValue = typeof value === 'boolean' ? value : parseFloat(value);
-        if (typeof parsedValue === 'number' && isNaN(parsedValue)) return;
+    // Load state (in_service only)
+    const setLoadState = (index: number, inService: boolean) => {
+        setOverrides(prev => ({
+            ...prev,
+            loadStates: { ...prev.loadStates, [index]: inService }
+        }));
+    };
 
+    // Load values (p_mw, q_mvar)
+    const updateLoadValue = (index: number, field: keyof LoadValues, value: string) => {
+        const numValue = parseFloat(value);
+        if (isNaN(numValue)) return;
         setOverrides(prev => {
-            const currentGenOverrides = { ...prev.genOverrides };
-            if (!currentGenOverrides[index]) currentGenOverrides[index] = {};
-            currentGenOverrides[index][field] = parsedValue as any;
-            return { ...prev, genOverrides: currentGenOverrides };
+            const currentValues = { ...prev.loadValues };
+            if (!currentValues[index]) currentValues[index] = {};
+            currentValues[index][field] = numValue;
+            return { ...prev, loadValues: currentValues };
         });
     };
 
-    const updateExtGridOverride = (index: number, field: 'vm_pu' | 'in_service', value: string | boolean) => {
-        const parsedValue = typeof value === 'boolean' ? value : parseFloat(value);
-        if (typeof parsedValue === 'number' && isNaN(parsedValue)) return;
+    // ExtGrid state (in_service only)
+    const setExtGridState = (index: number, inService: boolean) => {
+        setOverrides(prev => ({
+            ...prev,
+            extGridStates: { ...prev.extGridStates, [index]: inService }
+        }));
+    };
 
+    // ExtGrid values (vm_pu)
+    const updateExtGridValue = (index: number, field: keyof ExtGridValues, value: string) => {
+        const numValue = parseFloat(value);
+        if (isNaN(numValue)) return;
         setOverrides(prev => {
-            const currentExtOverrides = { ...prev.extGridOverrides };
-            if (!currentExtOverrides[index]) currentExtOverrides[index] = {};
-            currentExtOverrides[index][field] = parsedValue as any;
-            return { ...prev, extGridOverrides: currentExtOverrides };
+            const currentValues = { ...prev.extGridValues };
+            if (!currentValues[index]) currentValues[index] = {};
+            currentValues[index][field] = numValue;
+            return { ...prev, extGridValues: currentValues };
         });
     };
 
-    const toggleTrafoOutage = (index: number, initiallyInService: boolean) => {
+    const setTrafoState = (index: number, inService: boolean) => {
         setOverrides(prev => {
-            const isCurrentlyOutaged = prev.trafoOutages.includes(index) ? initiallyInService : !initiallyInService;
-
-            const newTrafoOutages = prev.trafoOutages.includes(index)
-                ? prev.trafoOutages.filter(i => i !== index)
-                : [...prev.trafoOutages, index];
-            return { ...prev, trafoOutages: newTrafoOutages };
+            const newTrafoStates = { ...prev.trafoStates, [index]: inService };
+            return { ...prev, trafoStates: newTrafoStates };
         });
     };
 
@@ -95,8 +117,9 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
         onApplyOverrides(DEFAULT_OVERRIDES);
     };
 
-    const handleApply = () => {
-        onApplyOverrides(overrides);
+    const handleApply = async () => {
+        await onApplyOverrides(overrides);
+        // Don't reset overrides - keep them so Re-run Diagnosis works
     };
 
     if (!networkState) {
@@ -131,6 +154,39 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                     </div>
                 </CardTitle>
                 <CardDescription>Tweak parameters and re-run flow</CardDescription>
+
+                {/* Convergence Status */}
+                {lastSimulationConverged !== null && (
+                    <div className={`mt-2 px-3 py-2 rounded-md text-sm font-medium ${
+                        lastSimulationConverged
+                            ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+                            : 'bg-red-500/10 text-red-600 dark:text-red-400'
+                    }`}>
+                        {lastSimulationConverged ? '✓ Power flow converged' : '✗ Power flow did not converge'}
+                    </div>
+                )}
+
+                <Button
+                    className="w-full mt-3"
+                    variant="secondary"
+                    onClick={() => {
+                        console.log('Re-diagnose sending overrides:', JSON.stringify(overrides, null, 2));
+                        onReDiagnose(overrides);
+                    }}
+                    disabled={isLoading || isReDiagnosing}
+                >
+                    {isReDiagnosing ? (
+                        <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Re-analyzing...
+                        </>
+                    ) : (
+                        <>
+                            <Stethoscope className="h-4 w-4 mr-2" />
+                            Re-run Diagnosis
+                        </>
+                    )}
+                </Button>
             </CardHeader>
 
             <CardContent className="flex-1 overflow-y-auto p-0">
@@ -159,20 +215,21 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                 <div className="space-y-2 pt-2">
                                     {lines.map(([idxStr, line]) => {
                                         const idx = parseInt(idxStr);
-                                        const initiallyOutaged = line.in_service === false;
-                                        const isToggledByUser = overrides.lineOutages.includes(idx);
-                                        const isOutaged = isToggledByUser ? !initiallyOutaged : initiallyOutaged;
+                                        // Use override if set, otherwise use networkState
+                                        const inService = idx in overrides.lineStates
+                                            ? overrides.lineStates[idx]
+                                            : line.in_service !== false;
 
                                         return (
                                             <div key={`line-${idxStr}`} className="flex items-center justify-between text-xs p-2 rounded bg-muted/30">
                                                 <span>{line.name || `Line ${idxStr}`} (Bus {line.from_bus} ➔ {line.to_bus})</span>
                                                 <div className="flex items-center gap-2">
-                                                    <span className={isOutaged ? "text-destructive" : "text-success"}>
-                                                        {isOutaged ? "Tripped" : "In Service"}
+                                                    <span className={!inService ? "text-destructive" : "text-success"}>
+                                                        {!inService ? "Tripped" : "In Service"}
                                                     </span>
                                                     <Switch
-                                                        checked={!isOutaged}
-                                                        onCheckedChange={() => toggleLineOutage(idx, line.in_service !== false)}
+                                                        checked={inService}
+                                                        onCheckedChange={(checked) => setLineState(idx, checked)}
                                                         disabled={isLoading}
                                                     />
                                                 </div>
@@ -190,9 +247,12 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                 <div className="space-y-4 pt-2">
                                     {gens.map(([idxStr, gen]) => {
                                         const idx = parseInt(idxStr);
-                                        const currentP = overrides.genOverrides[idx]?.p_mw ?? gen.p_mw;
-                                        const currentV = overrides.genOverrides[idx]?.vm_pu ?? gen.vm_pu;
-                                        const inService = overrides.genOverrides[idx]?.in_service ?? gen.in_service ?? true;
+                                        const currentP = overrides.genValues[idx]?.p_mw ?? gen.p_mw;
+                                        const currentV = overrides.genValues[idx]?.vm_pu ?? gen.vm_pu;
+                                        // Use explicit state map, fall back to networkState
+                                        const inService = idx in overrides.genStates
+                                            ? overrides.genStates[idx]
+                                            : gen.in_service !== false;
                                         return (
                                             <div key={`gen-${idxStr}`} className="space-y-2 p-2 rounded bg-muted/30 text-xs">
                                                 <div className="flex items-center justify-between font-medium">
@@ -203,7 +263,7 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                                         </span>
                                                         <Switch
                                                             checked={inService}
-                                                            onCheckedChange={(val) => updateGenOverride(idx, 'in_service', val)}
+                                                            onCheckedChange={(val) => setGenState(idx, val)}
                                                             disabled={isLoading}
                                                         />
                                                     </div>
@@ -214,7 +274,7 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                                         type="number"
                                                         className="h-7 text-xs"
                                                         value={currentP}
-                                                        onChange={(e) => updateGenOverride(idx, 'p_mw', e.target.value)}
+                                                        onChange={(e) => updateGenValue(idx, 'p_mw', e.target.value)}
                                                         disabled={isLoading}
                                                     />
                                                 </div>
@@ -225,7 +285,7 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                                         className="h-7 text-xs"
                                                         value={currentV}
                                                         step={0.01}
-                                                        onChange={(e) => updateGenOverride(idx, 'vm_pu', e.target.value)}
+                                                        onChange={(e) => updateGenValue(idx, 'vm_pu', e.target.value)}
                                                         disabled={isLoading}
                                                     />
                                                 </div>
@@ -243,9 +303,12 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                 <div className="space-y-4 pt-2">
                                     {loads.map(([idxStr, load]) => {
                                         const idx = parseInt(idxStr);
-                                        const currentP = overrides.loadOverrides[idx]?.p_mw ?? load.p_mw;
-                                        const currentQ = overrides.loadOverrides[idx]?.q_mvar ?? load.q_mvar;
-                                        const inService = overrides.loadOverrides[idx]?.in_service ?? load.in_service ?? true;
+                                        const currentP = overrides.loadValues[idx]?.p_mw ?? load.p_mw;
+                                        const currentQ = overrides.loadValues[idx]?.q_mvar ?? load.q_mvar;
+                                        // Use explicit state map, fall back to networkState
+                                        const inService = idx in overrides.loadStates
+                                            ? overrides.loadStates[idx]
+                                            : load.in_service !== false;
                                         return (
                                             <div key={`load-${idxStr}`} className="space-y-2 p-2 rounded bg-muted/30 text-xs">
                                                 <div className="flex items-center justify-between font-medium">
@@ -256,7 +319,7 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                                         </span>
                                                         <Switch
                                                             checked={inService}
-                                                            onCheckedChange={(val) => updateLoadOverride(idx, 'in_service', val)}
+                                                            onCheckedChange={(val) => setLoadState(idx, val)}
                                                             disabled={isLoading}
                                                         />
                                                     </div>
@@ -267,7 +330,7 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                                         type="number"
                                                         className="h-7 text-xs"
                                                         value={currentP}
-                                                        onChange={(e) => updateLoadOverride(idx, 'p_mw', e.target.value)}
+                                                        onChange={(e) => updateLoadValue(idx, 'p_mw', e.target.value)}
                                                         disabled={isLoading}
                                                     />
                                                 </div>
@@ -277,7 +340,7 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                                         type="number"
                                                         className="h-7 text-xs"
                                                         value={currentQ}
-                                                        onChange={(e) => updateLoadOverride(idx, 'q_mvar', e.target.value)}
+                                                        onChange={(e) => updateLoadValue(idx, 'q_mvar', e.target.value)}
                                                         disabled={isLoading}
                                                     />
                                                 </div>
@@ -296,20 +359,21 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                     <div className="space-y-4 pt-2">
                                         {trafos.map(([idxStr, trafo]) => {
                                             const idx = parseInt(idxStr);
-                                            const initiallyOutaged = trafo.in_service === false;
-                                            const isToggledByUser = overrides.trafoOutages.includes(idx);
-                                            const isOutaged = isToggledByUser ? !initiallyOutaged : initiallyOutaged;
+                                            // Use override if set, otherwise use networkState
+                                            const inService = idx in overrides.trafoStates
+                                                ? overrides.trafoStates[idx]
+                                                : trafo.in_service !== false;
 
                                             return (
                                                 <div key={`trafo-${idxStr}`} className="flex items-center justify-between text-xs p-2 rounded bg-muted/30">
                                                     <span>{trafo.name || `Trafo ${idxStr}`} (Bus {trafo.hv_bus} ➔ {trafo.lv_bus})</span>
                                                     <div className="flex items-center gap-2">
-                                                        <span className={isOutaged ? "text-destructive" : "text-success"}>
-                                                            {isOutaged ? "Tripped" : "In Service"}
+                                                        <span className={!inService ? "text-destructive" : "text-success"}>
+                                                            {!inService ? "Tripped" : "In Service"}
                                                         </span>
                                                         <Switch
-                                                            checked={!isOutaged}
-                                                            onCheckedChange={() => toggleTrafoOutage(idx, trafo.in_service !== false)}
+                                                            checked={inService}
+                                                            onCheckedChange={(checked) => setTrafoState(idx, checked)}
                                                             disabled={isLoading}
                                                         />
                                                     </div>
@@ -329,8 +393,11 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                     <div className="space-y-4 pt-2">
                                         {extGrids.map(([idxStr, ext]) => {
                                             const idx = parseInt(idxStr);
-                                            const currentV = overrides.extGridOverrides[idx]?.vm_pu ?? ext.vm_pu;
-                                            const inService = overrides.extGridOverrides[idx]?.in_service ?? ext.in_service ?? true;
+                                            const currentV = overrides.extGridValues[idx]?.vm_pu ?? ext.vm_pu;
+                                            // Use explicit state map, fall back to networkState
+                                            const inService = idx in overrides.extGridStates
+                                                ? overrides.extGridStates[idx]
+                                                : ext.in_service !== false;
                                             return (
                                                 <div key={`ext-${idxStr}`} className="space-y-2 p-2 rounded bg-muted/30 text-xs">
                                                     <div className="flex items-center justify-between font-medium">
@@ -341,7 +408,7 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                                             </span>
                                                             <Switch
                                                                 checked={inService}
-                                                                onCheckedChange={(val) => updateExtGridOverride(idx, 'in_service', val)}
+                                                                onCheckedChange={(val) => setExtGridState(idx, val)}
                                                                 disabled={isLoading}
                                                             />
                                                         </div>
@@ -353,7 +420,7 @@ export function NetworkControlBoard({ networkState, onApplyOverrides, isLoading 
                                                             className="h-7 text-xs"
                                                             value={currentV}
                                                             step={0.01}
-                                                            onChange={(e) => updateExtGridOverride(idx, 'vm_pu', e.target.value)}
+                                                            onChange={(e) => updateExtGridValue(idx, 'vm_pu', e.target.value)}
                                                             disabled={isLoading}
                                                         />
                                                     </div>

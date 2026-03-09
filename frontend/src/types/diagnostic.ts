@@ -11,11 +11,21 @@ export interface Scenario {
   category: 'normal' | 'nonconvergence' | 'voltage' | 'thermal' | 'contingency';
 }
 
+export interface ParsedAffectedComponents {
+  bus?: number[];
+  line?: number[];
+  load?: number[];
+  gen?: number[];
+  trafo?: number[];
+  ext_grid?: number[];
+}
+
 export interface PipelineResult {
   analysisStatus: 'success' | 'error' | 'not_implemented' | 'skipped';
   rootCauses: string[];
   affectedComponents: string[];
   correctiveActions: string[];
+  parsedAffectedComponents?: ParsedAffectedComponents;
 }
 
 export type PipelineId = 'baseline' | 'agentic';
@@ -23,7 +33,6 @@ export type PipelineId = 'baseline' | 'agentic';
 export interface DiagnoseResponse {
   baseline: PipelineResult;
   agentic: PipelineResult;
-  plotHtml?: string;
 }
 
 export interface GeneratedGroundTruth {
@@ -40,19 +49,40 @@ export interface DiagnoseNLResponse {
   generatedGroundTruth: GeneratedGroundTruth | null;
   baseline: PipelineResult;
   agentic: PipelineResult;
-  plotHtml?: string;
   responseType: 'text_only' | 'plot_only' | 'full_diagnosis';
   textAnswer?: string;
 }
 
 // Network Manipulation Types
+
+// Value overrides (numeric properties only)
+export interface LoadValues {
+  p_mw?: number;
+  q_mvar?: number;
+}
+
+export interface GenValues {
+  p_mw?: number;
+  vm_pu?: number;
+}
+
+export interface ExtGridValues {
+  vm_pu?: number;
+}
+
+// Override state with separate in_service maps and value maps
 export interface OverrideState {
   globalLoadScale: number;
-  lineOutages: number[];
-  trafoOutages: number[];
-  loadOverrides: Record<number, { p_mw?: number; q_mvar?: number; in_service?: boolean }>;
-  genOverrides: Record<number, { p_mw?: number; vm_pu?: number; in_service?: boolean }>;
-  extGridOverrides: Record<number, { vm_pu?: number; in_service?: boolean }>;
+  // In-service state maps (boolean only)
+  lineStates: Record<number, boolean>;
+  trafoStates: Record<number, boolean>;
+  genStates: Record<number, boolean>;
+  loadStates: Record<number, boolean>;
+  extGridStates: Record<number, boolean>;
+  // Value overrides (numeric properties)
+  loadValues: Record<number, LoadValues>;
+  genValues: Record<number, GenValues>;
+  extGridValues: Record<number, ExtGridValues>;
 }
 
 export interface BusData {
@@ -60,7 +90,9 @@ export interface BusData {
   vn_kv: number;
   type: string;
   in_service: boolean;
-  [key: string]: any;
+  zone?: string;
+  max_vm_pu?: number;
+  min_vm_pu?: number;
 }
 
 export interface LineData {
@@ -69,7 +101,12 @@ export interface LineData {
   to_bus: number;
   length_km: number;
   in_service: boolean;
-  [key: string]: any;
+  max_i_ka?: number;
+  r_ohm_per_km?: number;
+  x_ohm_per_km?: number;
+  c_nf_per_km?: number;
+  max_loading_percent?: number;
+  std_type?: string;
 }
 
 export interface LoadData {
@@ -78,7 +115,10 @@ export interface LoadData {
   p_mw: number;
   q_mvar: number;
   in_service: boolean;
-  [key: string]: any;
+  const_z_percent?: number;
+  const_i_percent?: number;
+  scaling?: number;
+  type?: string;
 }
 
 export interface GenData {
@@ -87,7 +127,13 @@ export interface GenData {
   p_mw: number;
   vm_pu: number;
   in_service: boolean;
-  [key: string]: any;
+  min_p_mw?: number;
+  max_p_mw?: number;
+  min_q_mvar?: number;
+  max_q_mvar?: number;
+  scaling?: number;
+  type?: string;
+  controllable?: boolean;
 }
 
 export interface TrafoData {
@@ -95,7 +141,14 @@ export interface TrafoData {
   hv_bus: number;
   lv_bus: number;
   in_service: boolean;
-  [key: string]: any;
+  sn_mva?: number;
+  vn_hv_kv?: number;
+  vn_lv_kv?: number;
+  vk_percent?: number;
+  vkr_percent?: number;
+  tap_pos?: number;
+  shift_degree?: number;
+  std_type?: string;
 }
 
 export interface ExtGridData {
@@ -103,7 +156,23 @@ export interface ExtGridData {
   bus: number;
   vm_pu: number;
   in_service: boolean;
-  [key: string]: any;
+  va_degree?: number;
+  min_p_mw?: number;
+  max_p_mw?: number;
+  min_q_mvar?: number;
+  max_q_mvar?: number;
+}
+
+export interface BusCoords {
+  [busIdx: string]: { x: number; y: number };
+}
+
+export interface AffectedComponents {
+  bus?: number[];
+  line?: number[];
+  trafo?: number[];
+  load?: number[];
+  gen?: number[];
 }
 
 export interface RawNetworkState {
@@ -113,7 +182,10 @@ export interface RawNetworkState {
   gen: Record<string, GenData>;
   trafo: Record<string, TrafoData>;
   ext_grid: Record<string, ExtGridData>;
-  res_bus?: any[];
-  res_line?: any[];
+  res_bus?: Record<string, { vm_pu: number; va_degree: number; p_mw: number; q_mvar: number }>;
+  res_line?: Record<string, { loading_percent: number; p_from_mw: number; p_to_mw: number }>;
+  bus_coords: BusCoords;
+  affected_components: AffectedComponents;
+  converged: boolean;
 }
 

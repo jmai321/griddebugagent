@@ -1,6 +1,6 @@
-import { Network, Scenario, DiagnoseResponse, DiagnoseNLResponse } from '@/types/diagnostic';
+import { Network, Scenario, DiagnoseResponse, DiagnoseNLResponse, OverrideState } from '@/types/diagnostic';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export async function fetchNetworks(): Promise<Network[]> {
   const res = await fetch(`${API_BASE}/networks`);
@@ -33,5 +33,20 @@ export async function runNLDiagnosis(network: string, description: string): Prom
     body: JSON.stringify({ network, description }),
   });
   if (!res.ok) throw new Error('NL Diagnosis request failed');
+  return res.json();
+}
+
+export async function runReDiagnosis(
+  network: string,
+  scenario: string,
+  overrides: OverrideState,
+  generatedCode?: string | null
+): Promise<DiagnoseResponse> {
+  const res = await fetch(`${API_BASE}/api/rediagnose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ network, scenario, overrides, generatedCode }),
+  });
+  if (!res.ok) throw new Error('Re-diagnosis request failed');
   return res.json();
 }

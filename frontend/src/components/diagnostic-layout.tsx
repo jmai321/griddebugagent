@@ -3,14 +3,13 @@
 import { useState } from 'react';
 import { InputPanel } from './input-panel';
 import { ResultsPanel } from './results-panel';
-import { PipelineResult, PipelineId, DiagnoseNLResponse } from '@/types/diagnostic';
+import { PipelineResult, PipelineId, DiagnoseNLResponse, DiagnoseResponse } from '@/types/diagnostic';
 import { runDiagnosis, runNLDiagnosis } from '@/lib/api';
 
 export function DiagnosticLayout() {
-  const [fullResponse, setFullResponse] = useState<{ baseline: PipelineResult; agentic: PipelineResult; plotHtml?: string } | null>(null);
+  const [fullResponse, setFullResponse] = useState<{ baseline: PipelineResult; agentic: PipelineResult } | null>(null);
   const [selectedPipeline, setSelectedPipeline] = useState<PipelineId>('baseline');
   const [nlExtra, setNlExtra] = useState<DiagnoseNLResponse | null>(null);
-  const [plotHtml, setPlotHtml] = useState<string | null>(null);
   const [currentNetwork, setCurrentNetwork] = useState<string | null>(null);
   const [currentScenario, setCurrentScenario] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -22,13 +21,11 @@ export function DiagnosticLayout() {
     setIsLoading(true);
     setError(null);
     setNlExtra(null);
-    setPlotHtml(null);
     setCurrentNetwork(network);
     setCurrentScenario(scenario);
     try {
       const response = await runDiagnosis(network, scenario);
-      setFullResponse({ baseline: response.baseline, agentic: response.agentic, plotHtml: response.plotHtml });
-      setPlotHtml(response.plotHtml ?? null);
+      setFullResponse({ baseline: response.baseline, agentic: response.agentic });
     } catch {
       setError('Analysis failed. Please try again.');
       setFullResponse(null);
@@ -41,15 +38,13 @@ export function DiagnosticLayout() {
     setIsLoading(true);
     setError(null);
     setNlExtra(null);
-    setPlotHtml(null);
     setCurrentNetwork(network);
     setCurrentScenario('nl_generated');
     try {
       const response = await runNLDiagnosis(network, description);
       setNlExtra(response);
-      setPlotHtml(response.plotHtml ?? null);
       if (response.generationStatus === 'success') {
-        setFullResponse({ baseline: response.baseline, agentic: response.agentic, plotHtml: response.plotHtml });
+        setFullResponse({ baseline: response.baseline, agentic: response.agentic });
       } else {
         setError(response.generationError || 'Failed to generate scenario');
         setFullResponse(null);
@@ -62,9 +57,13 @@ export function DiagnosticLayout() {
     }
   };
 
+  const handleDiagnosisUpdate = (response: DiagnoseResponse) => {
+    setFullResponse({ baseline: response.baseline, agentic: response.agentic });
+  };
+
   return (
-    <div className="flex h-screen bg-background">
-      <div className="w-1/2 border-r border-border">
+    <div className="flex h-screen bg-background overflow-hidden">
+      <div className="w-[360px] min-w-[320px] border-r border-border flex-shrink-0 h-full overflow-y-auto">
         <InputPanel
           onAnalyze={handleAnalyze}
           onAnalyzeNL={handleAnalyzeNL}
@@ -73,16 +72,16 @@ export function DiagnosticLayout() {
           onPipelineChange={setSelectedPipeline}
         />
       </div>
-      <div className="w-1/2">
+      <div className="flex-1 h-full overflow-hidden">
         <ResultsPanel
           result={result}
           selectedPipeline={selectedPipeline}
           nlExtra={nlExtra}
-          plotHtml={plotHtml}
           isLoading={isLoading}
           error={error}
           networkName={currentNetwork}
           scenarioName={currentScenario}
+          onDiagnosisUpdate={handleDiagnosisUpdate}
         />
       </div>
     </div>

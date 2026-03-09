@@ -27,6 +27,7 @@ export function DiagnosticLayout() {
     setError(null);
     setNlExtra(null);
     setPlotHtml(null);
+    setIterativePlotHtml(null);
     setFullResponse(null);
     setCurrentNetwork(network);
     setCurrentScenario(scenario);

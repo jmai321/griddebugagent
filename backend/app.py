@@ -754,6 +754,7 @@ def run_diagnose(req: DiagnoseRequest):
         agentic = _build_pipeline_result(agentic_report, agentic_status)
         tool_calls = agentic_result.get("tool_calls", [])
         agentic["toolCalls"] = tool_calls
+        agentic["tool_calls"] = tool_calls
         agentic["conversation"] = agentic_result.get("conversation", [])
         agentic["executionTrace"] = tool_calls
         reasoning_trace = _format_reasoning_trace(tool_calls, agentic_report)
@@ -772,6 +773,7 @@ def run_diagnose(req: DiagnoseRequest):
             "affectedComponents": [],
             "correctiveActions": [],
             "toolCalls": [],
+            "tool_calls": [],
             "reasoningTrace": f"Agent failed: {e}",
             "reasoningQuality": {"checks": [], "summary": "N/A (agent failed)", "passedCount": 0, "totalCount": 0},
         }
@@ -865,6 +867,7 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             out = _build_pipeline_result(report, status)
             tc = r.get("tool_calls", [])
             out["toolCalls"] = tc
+            out["tool_calls"] = tc
             out["conversation"] = r.get("conversation", [])
             out["executionTrace"] = tc
             out["reasoningTrace"] = _format_reasoning_trace(tc, report)
@@ -874,7 +877,7 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             return out
         except Exception as e:
             return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
-                    "correctiveActions": [], "toolCalls": [], "reasoningTrace": f"Agent failed: {e}",
+                    "correctiveActions": [], "toolCalls": [], "tool_calls": [], "reasoningTrace": f"Agent failed: {e}",
                     "reasoningQuality": {"checks": [], "summary": "N/A", "passedCount": 0, "totalCount": 0}}
 
     def _run_iterative(scenario_id, network_name):
@@ -891,6 +894,8 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             out["finalConverged"] = r.get("final_converged", False)
             out["iterationsUsed"] = r.get("iterations_used", 0)
             out["executionTrace"] = r.get("fix_history", [])
+            iter_combined = _get_combined_affected_components(s.net, {})
+            out["iterativePlotHtml"] = _generate_diagnostic_plot(s.net, iter_combined)
             return out
         except Exception as e:
             return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
@@ -1047,6 +1052,7 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         agentic = _build_pipeline_result(agentic_report, agentic_status)
         tool_calls = agentic_result.get("tool_calls", [])
         agentic["toolCalls"] = tool_calls
+        agentic["tool_calls"] = tool_calls
         agentic["conversation"] = agentic_result.get("conversation", [])
         agentic["executionTrace"] = tool_calls
         reasoning_trace_nl = _format_reasoning_trace(tool_calls, agentic_report)
@@ -1065,6 +1071,7 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
             "affectedComponents": [],
             "correctiveActions": [],
             "toolCalls": [],
+            "tool_calls": [],
             "reasoningTrace": "Agent failed.",
             "reasoningQuality": {"checks": [], "summary": "N/A (agent failed)", "passedCount": 0, "totalCount": 0},
         }

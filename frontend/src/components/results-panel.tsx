@@ -583,6 +583,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
                 )}
               </CardContent>
             </Card>
+
           </>
         )}
 

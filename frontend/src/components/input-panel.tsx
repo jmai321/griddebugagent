@@ -94,7 +94,7 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProp
               : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
               }`}
           >
-            ✨ Describe Failure
+            Describe Failure
           </button>
           <button
             onClick={() => setMode('preset')}
@@ -103,7 +103,7 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProp
               : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
               }`}
           >
-            📋 Preset Scenarios
+            Preset Scenarios
           </button>
         </div>
 
@@ -223,7 +223,7 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProp
           className="w-full"
           size="lg"
         >
-          {isLoading ? 'Analyzing...' : mode === 'nl' ? '✨ Generate & Analyze' : 'Run Analysis'}
+          {isLoading ? 'Analyzing...' : mode === 'nl' ? 'Generate & Analyze' : 'Run Analysis'}
         </Button>
       </div>
     </div>

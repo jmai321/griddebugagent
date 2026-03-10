@@ -63,18 +63,18 @@ import pandapower.networks as nw
 def _get_available_networks() -> list[dict]:
     networks = []
     common_cases = ["case14", "case30", "case39", "case57", "case118", "case300"]
-    
+
     # Priority defaults
     for name in common_cases:
         if hasattr(nw, name):
             networks.append({"id": name, "label": f"IEEE {name.replace('case', '')}-Bus"})
-        
+
     # Add the rest of the zero-arg functions from pandapower.networks
     for name, obj in inspect.getmembers(nw):
         if inspect.isfunction(obj) and not name.startswith('_') and name not in common_cases:
             sig = inspect.signature(obj)
             has_required = any(
-                p.default == inspect.Parameter.empty 
+                p.default == inspect.Parameter.empty
                 and p.kind in [inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.POSITIONAL_ONLY]
                 for p in sig.parameters.values()
             )
@@ -187,13 +187,13 @@ def _parse_llm_report(report: str) -> dict:
         lines = text.split("\n")
         in_section = False
         captured_lines = []
-        
+
         section_lower = section.lower()
         known_headers = ["root causes", "affected components", "corrective actions", "reasoning trace"]
-        
+
         for line in lines:
             line_lower = line.lower()
-            
+
             # Check if this line is ANY header
             is_any_header = False
             for h in known_headers:
@@ -202,7 +202,7 @@ def _parse_llm_report(report: str) -> dict:
                 if cleaned_line.startswith(h):
                     is_any_header = True
                     break
-                    
+
             if is_any_header:
                 cleaned_line = re.sub(r'^[\s#*\-\d.]+', '', line_lower).strip()
                 if cleaned_line.startswith(section_lower):
@@ -219,7 +219,7 @@ def _parse_llm_report(report: str) -> dict:
                     in_section = False
             elif in_section:
                 captured_lines.append(line)
-                
+
         return _extract_items("\n".join(captured_lines))
 
     result["rootCauses"] = extract_section_items(report, "Root Causes")
@@ -768,57 +768,35 @@ def run_rediagnose(req: ReDiagnoseRequest):
     baseline_status = "success" if not baseline_report.startswith("LLM call failed") else "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status)
 
+    # Use iterative debugger for agentic tab
     try:
-        agentic_result = _agentic_agent.diagnose(net, network_name=req.network)
-        agentic_report = agentic_result["response"]
-        agentic_status = "success"
-        if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
-            agentic_status = "error"
-        agentic = _build_pipeline_result(agentic_report, agentic_status)
-        agentic["tool_calls"] = agentic_result.get("tool_calls", [])
-        agentic["conversation"] = agentic_result.get("conversation", [])
-    except Exception:
+        import copy
+        net_iter = copy.deepcopy(net)
+        iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        iter_report = iter_result["response"]
+        iter_status = "success"
+        if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
+            iter_status = "error"
+        agentic = _build_pipeline_result(iter_report, iter_status)
+        fix_history = iter_result.get("fix_history", [])
+        agentic["fixHistory"] = fix_history
+        agentic["finalConverged"] = iter_result.get("final_converged", False)
+        agentic["iterationsUsed"] = iter_result.get("iterations_used", 0)
+        agentic["toolCalls"] = fix_history
+    except Exception as e:
+        print(f"[REDIAGNOSE] Agentic error: {e}")
         agentic = {
             "analysisStatus": "error",
             "rootCauses": [],
             "affectedComponents": [],
             "correctiveActions": [],
             "parsedAffectedComponents": {},
+            "fixHistory": [],
+            "finalConverged": False,
+            "toolCalls": [],
         }
 
     return {"baseline": baseline, "agentic": agentic}
-def _get_combined_affected_components(net: pp.pandapowerNet, base_components: dict = None) -> dict:
-    """Merge predefined affected components with dynamically found violations."""
-    import copy
-    combined = copy.deepcopy(base_components) if base_components else {}
-    
-    # Expand empty lists to "all indices" for a type handled by the LLM
-    for comp_type in ["bus", "line", "trafo", "load", "gen", "sgen", "ext_grid"]:
-        if comp_type in combined and not combined[comp_type]:
-            if hasattr(net, comp_type) and getattr(net, comp_type) is not None and not getattr(net, comp_type).empty:
-                combined[comp_type] = getattr(net, comp_type).index.tolist()
-    
-    # Try to find voltage violations
-    v_min_global, v_max_global = 0.95, 1.05
-    if getattr(net, "res_bus", None) is not None and not net.res_bus.empty:
-        for idx, row in net.res_bus.iterrows():
-            b_min = net.bus.at[idx, "min_vm_pu"] if "min_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "min_vm_pu"]) else v_min_global
-            b_max = net.bus.at[idx, "max_vm_pu"] if "max_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "max_vm_pu"]) else v_max_global
-            
-            if row["vm_pu"] < b_min or row["vm_pu"] > b_max:
-                combined.setdefault("bus", []).append(int(idx))
-                
-    if "bus" in combined:
-        combined["bus"] = list(set(combined["bus"]))
-        
-    # Try to find thermal overloads
-    if getattr(net, "res_line", None) is not None and not net.res_line.empty:
-        ol = net.res_line[net.res_line["loading_percent"] > 100].index.tolist()
-        if ol:
-            combined.setdefault("line", []).extend(ol)
-            combined["line"] = list(set(combined["line"]))
-            
-    return combined
 
 
 # ---------------------
@@ -853,27 +831,28 @@ def run_diagnose(req: DiagnoseRequest):
         baseline_status = "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status)
 
+    # --- Agentic pipeline (using iterative debugger) ---
     try:
-        agentic_result = _agentic_agent.diagnose(net, network_name=req.network, user_query=user_query)
-        agentic_report = agentic_result["response"]
-        agentic_status = "success"
-        if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
-            agentic_status = "error"
-        agentic = _build_pipeline_result(agentic_report, agentic_status)
-        tool_calls = agentic_result.get("tool_calls", [])
-        agentic["toolCalls"] = tool_calls
-        agentic["tool_calls"] = tool_calls
-        agentic["conversation"] = agentic_result.get("conversation", [])
-        agentic["executionTrace"] = tool_calls
-        reasoning_trace = _format_reasoning_trace(tool_calls, agentic_report)
-        agentic["reasoningTrace"] = reasoning_trace
+        import copy
+        net_iter = copy.deepcopy(net)
+        iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        iter_report = iter_result["response"]
+        iter_status = "success"
+        if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
+            iter_status = "error"
+        agentic = _build_pipeline_result(iter_report, iter_status)
+        fix_history = iter_result.get("fix_history", [])
+        agentic["fixHistory"] = fix_history
+        agentic["finalConverged"] = iter_result.get("final_converged", False)
+        agentic["iterationsUsed"] = iter_result.get("iterations_used", 0)
+        agentic["toolCalls"] = fix_history
+        # Compute reasoning quality
         agentic["reasoningQuality"] = _evaluate_reasoning_quality(
-            tool_calls,
+            fix_history,
             agentic.get("rootCauses", []),
             agentic.get("affectedComponents", []),
             agentic.get("correctiveActions", []),
         )
-        print("\n" + reasoning_trace + "\n")
     except Exception as e:
         agentic = {
             "analysisStatus": "error",
@@ -881,9 +860,7 @@ def run_diagnose(req: DiagnoseRequest):
             "affectedComponents": [],
             "correctiveActions": [],
             "toolCalls": [],
-            "tool_calls": [],
-            "reasoningTrace": f"Agent failed: {e}",
-            "reasoningQuality": {"checks": [], "summary": "N/A (agent failed)", "passedCount": 0, "totalCount": 0},
+            "reasoningQuality": {"checks": [], "summary": f"Agent failed: {e}", "passedCount": 0, "totalCount": 0},
         }
 
     return DiagnoseResult(baseline=baseline, agentic=agentic)
@@ -900,7 +877,7 @@ import asyncio, traceback
 async def run_diagnose_stream(req: DiagnoseRequest):
     """
     Same as /diagnose, but streams each pipeline result as a Server-Sent Event
-    the moment it completes:  plot → baseline → agentic → iterative → done.
+    the moment it completes: baseline → agentic → done.
     Sync pipeline calls are offloaded to threads so the event loop can flush.
     """
     valid_networks = [n["id"] for n in NETWORKS]
@@ -922,30 +899,8 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
                     "correctiveActions": [], "rawResult": str(e)}
 
-    def _run_agentic(net, network_name, user_query):
-        try:
-            r = _agentic_agent.diagnose(net, network_name=network_name, user_query=user_query)
-            report = r["response"]
-            status = "success"
-            if report.startswith("Agent loop error") or report.startswith("LLM call failed"):
-                status = "error"
-            out = _build_pipeline_result(report, status)
-            tc = r.get("tool_calls", [])
-            out["toolCalls"] = tc
-            out["tool_calls"] = tc
-            out["conversation"] = r.get("conversation", [])
-            out["executionTrace"] = tc
-            out["reasoningTrace"] = _format_reasoning_trace(tc, report)
-            out["reasoningQuality"] = _evaluate_reasoning_quality(
-                tc, out.get("rootCauses", []), out.get("affectedComponents", []),
-                out.get("correctiveActions", []))
-            return out
-        except Exception as e:
-            return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
-                    "correctiveActions": [], "toolCalls": [], "tool_calls": [], "reasoningTrace": f"Agent failed: {e}",
-                    "reasoningQuality": {"checks": [], "summary": "N/A", "passedCount": 0, "totalCount": 0}}
-
-    def _run_iterative(scenario_id, network_name):
+    def _run_agentic(scenario_id, network_name):
+        """Run iterative debugger as the agentic pipeline."""
         try:
             s, _ = _find_and_apply_scenario(scenario_id, network_name)
             s.run_pf()
@@ -959,17 +914,21 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             out["fixHistory"] = fix_history
             out["finalConverged"] = r.get("final_converged", False)
             out["iterationsUsed"] = r.get("iterations_used", 0)
-            out["executionTrace"] = fix_history
-            # Map fix_history to toolCalls format for frontend compatibility
             out["toolCalls"] = fix_history
+            # Compute reasoning quality
+            out["reasoningQuality"] = _evaluate_reasoning_quality(
+                fix_history,
+                out.get("rootCauses", []),
+                out.get("affectedComponents", []),
+                out.get("correctiveActions", []),
+            )
             return out
         except Exception as e:
-            print(f"[ITERATIVE ERROR] {e}")
-            import traceback
+            print(f"[AGENTIC ERROR] {e}")
             traceback.print_exc()
             return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
                     "correctiveActions": [], "fixHistory": [], "finalConverged": False,
-                    "iterationsUsed": 0, "executionTrace": [], "error": str(e)}
+                    "iterationsUsed": 0, "toolCalls": [], "error": str(e)}
 
     async def event_generator():
         # Apply scenario
@@ -982,14 +941,17 @@ async def run_diagnose_stream(req: DiagnoseRequest):
         baseline = await asyncio.to_thread(_run_baseline, net, req.network, user_query)
         yield _sse_event("baseline", baseline)
 
-        # 2) Agentic (using iterative debugger for auto-fix capability)
-        agentic = await asyncio.to_thread(_run_iterative, req.scenario, req.network)
+        # 2) Agentic (using iterative debugger)
+        agentic = await asyncio.to_thread(_run_agentic, req.scenario, req.network)
         yield _sse_event("agentic", agentic)
 
         # 3) Done
         yield _sse_event("done", {"status": "complete"})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ---------------------
 #  POST /diagnose_nl
 # ---------------------
 
@@ -1030,12 +992,6 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
             },
             "responseType": gen_result.get("response_type", "full_diagnosis"),
             "textAnswer": gen_result.get("text_answer", ""),
-            "agentic": {
-                "analysisStatus": "skipped",
-                "rootCauses": [],
-                "affectedComponents": [],
-                "correctiveActions": [],
-            },
         }
 
     net = gen_result["net"]
@@ -1111,8 +1067,14 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         agentic["finalConverged"] = iter_result.get("final_converged", False)
         agentic["iterationsUsed"] = iter_result.get("iterations_used", 0)
         agentic["toolCalls"] = fix_history
+        agentic["reasoningQuality"] = _evaluate_reasoning_quality(
+            fix_history,
+            agentic.get("rootCauses", []),
+            agentic.get("affectedComponents", []),
+            agentic.get("correctiveActions", []),
+        )
     except Exception as e:
-        print(f"[diagnose_nl] Iterative debugger error: {e}")
+        print(f"[diagnose_nl] Agentic error: {e}")
         agentic = {
             "analysisStatus": "error",
             "rootCauses": [],

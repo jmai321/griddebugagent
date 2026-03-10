@@ -20,14 +20,41 @@ export interface ParsedAffectedComponents {
   ext_grid?: number[];
 }
 
+/** One tool invocation during agentic reasoning. */
+export interface AgentToolCall {
+  iteration: number;
+  tool: string;
+  args: Record<string, unknown>;
+  result: unknown;
+}
+
 export interface PipelineResult {
+  rawResult?: string;
   analysisStatus: 'success' | 'error' | 'not_implemented' | 'skipped';
   rootCauses: string[];
   affectedComponents: string[];
   correctiveActions: string[];
   parsedAffectedComponents?: ParsedAffectedComponents;
+  /** Present for agentic pipeline: tools the agent called (reasoning trace). */
+  toolCalls?: AgentToolCall[];
+  /** Full reasoning process text (agentic only): steps and tool results. */
+  reasoningTrace?: string;
+  /** Heuristic checks: does tool usage support the report? (agentic only). */
+  reasoningQuality?: {
+    checks: { id: string; passed: boolean; message: string }[];
+    summary: string;
+    passedCount: number;
+    totalCount: number;
+  };
+  /** Iterative debugger: history of corrective actions applied. */
+  fixHistory?: Array<Record<string, unknown>>;
+  /** Whether power flow converged after all fixes (iterative only). */
+  finalConverged?: boolean;
+  /** Number of fix iterations used (iterative only). */
+  iterationsUsed?: number;
 }
 
+// Only 2 tabs: Baseline (manual) and Agentic (auto-fix)
 export type PipelineId = 'baseline' | 'agentic';
 
 export interface DiagnoseResponse {
@@ -49,7 +76,7 @@ export interface DiagnoseNLResponse {
   generatedGroundTruth: GeneratedGroundTruth | null;
   baseline: PipelineResult;
   agentic: PipelineResult;
-  responseType: 'text_only' | 'plot_only' | 'full_diagnosis';
+  responseType: 'text_only' | 'plot_only' | 'direct_answer' | 'full_diagnosis';
   textAnswer?: string;
 }
 
@@ -188,4 +215,3 @@ export interface RawNetworkState {
   affected_components: AffectedComponents;
   converged: boolean;
 }
-

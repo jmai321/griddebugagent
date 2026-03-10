@@ -24,6 +24,7 @@ from scenarios import (
 from scenarios.base_scenarios import load_network
 from agents.baseline import BaselineAgent
 from agents.agentic_pipeline import AgenticPipelineAgent
+from agents.iterative_debugger import IterativeDebuggerAgent
 from scenarios.nl_scenario_generator import NLScenarioGenerator
 
 load_dotenv()
@@ -48,6 +49,7 @@ _openai_key = os.getenv("OPENAI_API_KEY", "")
 _llm_client = OpenAI(api_key=_openai_key) if _openai_key else None
 _baseline_agent = BaselineAgent(llm_client=_llm_client)
 _agentic_agent = AgenticPipelineAgent(llm_client=_llm_client)
+_iterative_agent = IterativeDebuggerAgent(llm_client=_llm_client)
 _nl_generator = NLScenarioGenerator(llm_client=_llm_client)
 
 
@@ -60,7 +62,7 @@ import pandapower.networks as nw
 
 def _get_available_networks() -> list[dict]:
     networks = []
-    common_cases = ["case14", "case30", "case57", "case118", "case300"]
+    common_cases = ["case14", "case30", "case39", "case57", "case118", "case300"]
     
     # Priority defaults
     for name in common_cases:
@@ -121,6 +123,9 @@ def _find_and_apply_scenario(scenario_id: str, network: str):
     Instantiate the matching scenario, apply it, and return
     (scenario_object, ground_truth_result).
     """
+    if scenario_id == "nl_generated":
+        scenario_id = "normal_operation"
+
     entry = next((s for s in SCENARIOS if s["id"] == scenario_id), None)
     if entry is None:
         raise HTTPException(404, f"Unknown scenario: {scenario_id}")
@@ -142,22 +147,15 @@ def _parse_llm_report(report: str) -> dict:
     Tries to be robust to:
       - Sections appearing on the same line (no newlines)
       - Bulleted lists (-, *) and numbered lists (1., 2., ...)
-      - Optional text after section headers (e.g. "## Root Causes (ranked...)")
+      - Various markdown headers (##, **, etc.)
     """
     result = {"rootCauses": [], "affectedComponents": [], "correctiveActions": []}
 
     def _normalize_block(text: str) -> str:
-        """
-        Insert newlines to make list-like content line-oriented.
-        We only split numbered items when the dot is followed by whitespace,
-        so we don't break decimals like 11.77 or 1.08.
-        """
         text = text.strip()
-        # Force each heading to start a new line (handles one-line outputs)
-        text = re.sub(r"\s*(##\s*)", r"\n\1", text)
         # Convert " - " into real bullets on new lines
         text = re.sub(r"\s-\s", r"\n- ", text)
-        # Convert " 1. " into numbered items on new lines (dot must be followed by whitespace)
+        # Convert " 1. " into numbered items on new lines
         text = re.sub(r"\s(\d+)\.\s+", r"\n\1. ", text)
         return text.strip()
 
@@ -165,6 +163,9 @@ def _parse_llm_report(report: str) -> dict:
         items: list[str] = []
         for line in _normalize_block(block).split("\n"):
             line = line.strip()
+            # Remove leading/trailing bold markers
+            if line.startswith("**") and line.endswith("**"):
+                line = line[2:-2].strip()
             if not line:
                 continue
             if line.startswith(("-", "*")):
@@ -177,16 +178,49 @@ def _parse_llm_report(report: str) -> dict:
                 if item:
                     items.append(item)
                 continue
+            items.append(line)
+        if not items and block.strip():
+            return [block.strip()]
         return items
 
     def extract_section_items(text: str, section: str) -> list[str]:
-        # Match section header (optional suffix) then capture until next "##" or end.
-        # Don't require a newline after the header.
-        pattern = rf"##\s*{re.escape(section)}[^\n#]*\s*(.*?)(?=\s*##\s|\Z)"
-        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-        if not match:
-            return []
-        return _extract_items(match.group(1))
+        lines = text.split("\n")
+        in_section = False
+        captured_lines = []
+        
+        section_lower = section.lower()
+        known_headers = ["root causes", "affected components", "corrective actions", "reasoning trace"]
+        
+        for line in lines:
+            line_lower = line.lower()
+            
+            # Check if this line is ANY header
+            is_any_header = False
+            for h in known_headers:
+                # Look for header near the start of the line, ignoring markdown markers
+                cleaned_line = re.sub(r'^[\s#*\-\d.]+', '', line_lower).strip()
+                if cleaned_line.startswith(h):
+                    is_any_header = True
+                    break
+                    
+            if is_any_header:
+                cleaned_line = re.sub(r'^[\s#*\-\d.]+', '', line_lower).strip()
+                if cleaned_line.startswith(section_lower):
+                    in_section = True
+                    # Check if there's content on the same line after a colon or **
+                    if ":" in line:
+                        content_after_colon = line.split(":", 1)[1].strip()
+                        if content_after_colon:
+                            # if it ends with bold marker, strip it
+                            if content_after_colon.endswith("**"):
+                                content_after_colon = content_after_colon[:-2]
+                            captured_lines.append(content_after_colon)
+                else:
+                    in_section = False
+            elif in_section:
+                captured_lines.append(line)
+                
+        return _extract_items("\n".join(captured_lines))
 
     result["rootCauses"] = extract_section_items(report, "Root Causes")
     result["affectedComponents"] = extract_section_items(report, "Affected Components")
@@ -254,6 +288,120 @@ def _build_pipeline_result(report: str, analysis_status: str = "success") -> dic
         "affectedComponents": parsed["affectedComponents"],
         "correctiveActions": parsed["correctiveActions"],
         "parsedAffectedComponents": parsed_components,
+        "rawResult": report,
+    }
+
+
+def _format_reasoning_trace(tool_calls: list, final_report_snippet: str | None = None, max_result_len: int = 400) -> str:
+    """Build a human-readable full reasoning trace for the agentic pipeline."""
+    lines = [
+        "=== Agentic reasoning trace ===",
+        "Input: evidence text + triggered rules + failure_category (from Preprocessor).",
+        "",
+    ]
+    for i, tc in enumerate(tool_calls, 1):
+        tool = tc.get("tool", "?")
+        args = tc.get("args") or {}
+        result = tc.get("result")
+        it = tc.get("iteration", i - 1)
+        args_str = json.dumps(args, default=str) if args else ""
+        if isinstance(result, dict):
+            result_str = json.dumps(result, default=str)
+        else:
+            result_str = str(result)
+        if len(result_str) > max_result_len:
+            result_str = result_str[:max_result_len] + "..."
+        lines.append(f"Step {i} (iteration {it}): Called {tool}({args_str})")
+        lines.append(f"  → result: {result_str}")
+        lines.append("")
+    lines.append("Final step: Produced FINAL REPORT (parsed into root causes, affected components, corrective actions).")
+    if final_report_snippet:
+        snippet = (final_report_snippet[:800] + "...") if len(final_report_snippet) > 800 else final_report_snippet
+        lines.append("")
+        lines.append("--- Report snippet ---")
+        lines.append(snippet)
+    return "\n".join(lines)
+
+
+def _evaluate_reasoning_quality(
+    tool_calls: list,
+    root_causes: list,
+    affected_components: list,
+    corrective_actions: list,
+) -> dict:
+    """
+    Heuristic checks: does the agent's tool usage support what it claimed in the report?
+    Returns { "checks": [ {"id", "passed", "message"} ], "summary": "x/y passed" }.
+    """
+    report_text = " ".join(root_causes + affected_components + corrective_actions).lower()
+    tools_used = [tc.get("tool", "") for tc in tool_calls]
+    checks = []
+
+    # 1. Agent used at least one tool (gathered evidence)
+    used_tools = len(tool_calls) > 0
+    checks.append({
+        "id": "used_tools",
+        "passed": used_tools,
+        "message": "Agent called at least one tool to gather evidence." if used_tools else "Agent produced report without calling any tools (no tool-based evidence).",
+    })
+
+    # 2. If report mentions overload/loading/thermal → expect relevant tools
+    overload_keywords = ["overload", "loading", "thermal", "line loading", "congestion"]
+    mentions_overload = any(k in report_text for k in overload_keywords)
+    overload_tools = ["check_overloads", "get_loading_profile", "run_full_diagnostics", "run_power_flow", "run_dc_power_flow"]
+    has_overload_evidence = any(t in tools_used for t in overload_tools)
+    if mentions_overload:
+        checks.append({
+            "id": "evidence_for_overload",
+            "passed": has_overload_evidence,
+            "message": "Report mentions overload/loading; agent used overload/flow/diagnostic tools." if has_overload_evidence else "Report mentions overload/loading but agent did not call overload or power-flow tools.",
+        })
+
+    # 3. If report mentions voltage → expect voltage-related tools
+    voltage_keywords = ["voltage", "vm_pu", "violation", "undervoltage", "overvoltage"]
+    mentions_voltage = any(k in report_text for k in voltage_keywords)
+    voltage_tools = ["check_voltage_violations", "get_voltage_profile"]
+    has_voltage_evidence = any(t in tools_used for t in voltage_tools)
+    if mentions_voltage:
+        checks.append({
+            "id": "evidence_for_voltage",
+            "passed": has_voltage_evidence,
+            "message": "Report mentions voltage; agent used voltage-related tools." if has_voltage_evidence else "Report mentions voltage but agent did not call voltage tools.",
+        })
+
+    # 4. If report mentions balance/generation/load/convergence → expect balance or flow tools
+    balance_keywords = ["balance", "generation", "load", "convergence", "imbalance", "gen", "demand"]
+    mentions_balance = any(k in report_text for k in balance_keywords)
+    balance_tools = ["get_power_balance", "get_network_summary", "run_power_flow", "run_full_diagnostics"]
+    has_balance_evidence = any(t in tools_used for t in balance_tools)
+    if mentions_balance:
+        checks.append({
+            "id": "evidence_for_balance",
+            "passed": has_balance_evidence,
+            "message": "Report mentions balance/load/gen; agent used balance or flow tools." if has_balance_evidence else "Report mentions balance/load/gen but agent did not call power-balance or flow tools.",
+        })
+
+    # 5. Diagnostic order: power flow before overload/voltage checks (if those were used)
+    flow_tools = ["run_power_flow", "run_dc_power_flow", "run_full_diagnostics"]
+    diag_tools = ["check_overloads", "check_voltage_violations"]
+    flow_indices = [i for i, t in enumerate(tools_used) if t in flow_tools]
+    diag_indices = [i for i, t in enumerate(tools_used) if t in diag_tools]
+    order_ok = True
+    if diag_indices and flow_indices:
+        order_ok = min(flow_indices) < max(diag_indices)
+    checks.append({
+        "id": "reasonable_order",
+        "passed": order_ok,
+        "message": "Power flow / full diagnostics ran before overload/voltage checks (data before diagnosis)." if order_ok else "Overload/voltage checks ran but no prior power-flow/diagnostics call; consider running flow first.",
+    })
+
+    passed = sum(1 for c in checks if c["passed"])
+    total = len(checks)
+    return {
+        "checks": checks,
+        "summary": f"{passed}/{total} checks passed",
+        "passedCount": passed,
+        "totalCount": total,
     }
 
 
@@ -333,6 +481,7 @@ class DiagnoseRequest(BaseModel):
     network: str = "case14"
     scenario: str
     pipeline: str = "baseline"              # "baseline" or "agentic"
+    query: Optional[str] = None             # optional user/benchmark query (e.g. paper queries)
 
 
 class DiagnoseResult(BaseModel):
@@ -471,6 +620,7 @@ def get_networks():
 def get_scenarios():
     """Return the list of available failure scenarios for the dropdown."""
     return {"scenarios": SCENARIOS}
+
 
 
 
@@ -637,6 +787,38 @@ def run_rediagnose(req: ReDiagnoseRequest):
         }
 
     return {"baseline": baseline, "agentic": agentic}
+def _get_combined_affected_components(net: pp.pandapowerNet, base_components: dict = None) -> dict:
+    """Merge predefined affected components with dynamically found violations."""
+    import copy
+    combined = copy.deepcopy(base_components) if base_components else {}
+    
+    # Expand empty lists to "all indices" for a type handled by the LLM
+    for comp_type in ["bus", "line", "trafo", "load", "gen", "sgen", "ext_grid"]:
+        if comp_type in combined and not combined[comp_type]:
+            if hasattr(net, comp_type) and getattr(net, comp_type) is not None and not getattr(net, comp_type).empty:
+                combined[comp_type] = getattr(net, comp_type).index.tolist()
+    
+    # Try to find voltage violations
+    v_min_global, v_max_global = 0.95, 1.05
+    if getattr(net, "res_bus", None) is not None and not net.res_bus.empty:
+        for idx, row in net.res_bus.iterrows():
+            b_min = net.bus.at[idx, "min_vm_pu"] if "min_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "min_vm_pu"]) else v_min_global
+            b_max = net.bus.at[idx, "max_vm_pu"] if "max_vm_pu" in net.bus.columns and pd.notna(net.bus.at[idx, "max_vm_pu"]) else v_max_global
+            
+            if row["vm_pu"] < b_min or row["vm_pu"] > b_max:
+                combined.setdefault("bus", []).append(int(idx))
+                
+    if "bus" in combined:
+        combined["bus"] = list(set(combined["bus"]))
+        
+    # Try to find thermal overloads
+    if getattr(net, "res_line", None) is not None and not net.res_line.empty:
+        ol = net.res_line[net.res_line["loading_percent"] > 100].index.tolist()
+        if ol:
+            combined.setdefault("line", []).extend(ol)
+            combined["line"] = list(set(combined["line"]))
+            
+    return combined
 
 
 # ---------------------
@@ -661,36 +843,153 @@ def run_diagnose(req: DiagnoseRequest):
     # Attempt power flow
     scenario_obj.run_pf()
 
+    user_query = (req.query or "").strip() or ""
+
     # --- Baseline pipeline ---
-    baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
+    baseline_result = _baseline_agent.diagnose(net, network_name=req.network, user_query=user_query)
     baseline_report = baseline_result["response"]
     baseline_status = "success"
     if baseline_report.startswith("LLM call failed"):
         baseline_status = "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status)
 
-    # --- Agentic pipeline (with tools) ---
     try:
-        agentic_result = _agentic_agent.diagnose(net, network_name=req.network)
+        agentic_result = _agentic_agent.diagnose(net, network_name=req.network, user_query=user_query)
         agentic_report = agentic_result["response"]
         agentic_status = "success"
         if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
             agentic_status = "error"
         agentic = _build_pipeline_result(agentic_report, agentic_status)
-        agentic["tool_calls"] = agentic_result.get("tool_calls", [])
+        tool_calls = agentic_result.get("tool_calls", [])
+        agentic["toolCalls"] = tool_calls
+        agentic["tool_calls"] = tool_calls
         agentic["conversation"] = agentic_result.get("conversation", [])
+        agentic["executionTrace"] = tool_calls
+        reasoning_trace = _format_reasoning_trace(tool_calls, agentic_report)
+        agentic["reasoningTrace"] = reasoning_trace
+        agentic["reasoningQuality"] = _evaluate_reasoning_quality(
+            tool_calls,
+            agentic.get("rootCauses", []),
+            agentic.get("affectedComponents", []),
+            agentic.get("correctiveActions", []),
+        )
+        print("\n" + reasoning_trace + "\n")
     except Exception as e:
         agentic = {
             "analysisStatus": "error",
             "rootCauses": [],
             "affectedComponents": [],
             "correctiveActions": [],
+            "toolCalls": [],
+            "tool_calls": [],
+            "reasoningTrace": f"Agent failed: {e}",
+            "reasoningQuality": {"checks": [], "summary": "N/A (agent failed)", "passedCount": 0, "totalCount": 0},
         }
 
     return DiagnoseResult(baseline=baseline, agentic=agentic)
 
 
 # ---------------------
+#  POST /diagnose_stream  (Server-Sent Events)
+# ---------------------
+
+from fastapi.responses import StreamingResponse
+import asyncio, traceback
+
+@app.post("/diagnose_stream")
+async def run_diagnose_stream(req: DiagnoseRequest):
+    """
+    Same as /diagnose, but streams each pipeline result as a Server-Sent Event
+    the moment it completes:  plot → baseline → agentic → iterative → done.
+    Sync pipeline calls are offloaded to threads so the event loop can flush.
+    """
+    valid_networks = [n["id"] for n in NETWORKS]
+    if req.network not in valid_networks:
+        raise HTTPException(400, f"Unknown network: {req.network}")
+
+    def _sse_event(event: str, data: dict) -> str:
+        payload = json.dumps(data, default=str)
+        return f"event: {event}\ndata: {payload}\n\n"
+
+    # ---------- sync helpers (run in thread pool) ----------
+    def _run_baseline(net, network_name, user_query):
+        try:
+            r = _baseline_agent.diagnose(net, network_name=network_name, user_query=user_query)
+            report = r["response"]
+            status = "error" if report.startswith("LLM call failed") else "success"
+            return _build_pipeline_result(report, status)
+        except Exception as e:
+            return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
+                    "correctiveActions": [], "rawResult": str(e)}
+
+    def _run_agentic(net, network_name, user_query):
+        try:
+            r = _agentic_agent.diagnose(net, network_name=network_name, user_query=user_query)
+            report = r["response"]
+            status = "success"
+            if report.startswith("Agent loop error") or report.startswith("LLM call failed"):
+                status = "error"
+            out = _build_pipeline_result(report, status)
+            tc = r.get("tool_calls", [])
+            out["toolCalls"] = tc
+            out["tool_calls"] = tc
+            out["conversation"] = r.get("conversation", [])
+            out["executionTrace"] = tc
+            out["reasoningTrace"] = _format_reasoning_trace(tc, report)
+            out["reasoningQuality"] = _evaluate_reasoning_quality(
+                tc, out.get("rootCauses", []), out.get("affectedComponents", []),
+                out.get("correctiveActions", []))
+            return out
+        except Exception as e:
+            return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
+                    "correctiveActions": [], "toolCalls": [], "tool_calls": [], "reasoningTrace": f"Agent failed: {e}",
+                    "reasoningQuality": {"checks": [], "summary": "N/A", "passedCount": 0, "totalCount": 0}}
+
+    def _run_iterative(scenario_id, network_name):
+        try:
+            s, _ = _find_and_apply_scenario(scenario_id, network_name)
+            s.run_pf()
+            r = _iterative_agent.diagnose(s.net, network_name=network_name)
+            report = r["response"]
+            status = "success"
+            if report.startswith("Agent loop error") or report.startswith("LLM call failed"):
+                status = "error"
+            out = _build_pipeline_result(report, status)
+            fix_history = r.get("fix_history", [])
+            out["fixHistory"] = fix_history
+            out["finalConverged"] = r.get("final_converged", False)
+            out["iterationsUsed"] = r.get("iterations_used", 0)
+            out["executionTrace"] = fix_history
+            # Map fix_history to toolCalls format for frontend compatibility
+            out["toolCalls"] = fix_history
+            return out
+        except Exception as e:
+            print(f"[ITERATIVE ERROR] {e}")
+            import traceback
+            traceback.print_exc()
+            return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
+                    "correctiveActions": [], "fixHistory": [], "finalConverged": False,
+                    "iterationsUsed": 0, "executionTrace": [], "error": str(e)}
+
+    async def event_generator():
+        # Apply scenario
+        scenario_obj, ground_truth = _find_and_apply_scenario(req.scenario, req.network)
+        net = scenario_obj.net
+        scenario_obj.run_pf()
+        user_query = (req.query or "").strip() or ""
+
+        # 1) Baseline — offload to thread so yield actually flushes
+        baseline = await asyncio.to_thread(_run_baseline, net, req.network, user_query)
+        yield _sse_event("baseline", baseline)
+
+        # 2) Agentic (using iterative debugger for auto-fix capability)
+        agentic = await asyncio.to_thread(_run_iterative, req.scenario, req.network)
+        yield _sse_event("agentic", agentic)
+
+        # 3) Done
+        yield _sse_event("done", {"status": "complete"})
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 #  POST /diagnose_nl
 # ---------------------
 
@@ -788,29 +1087,40 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         }
 
     # --- Baseline pipeline ---
-    baseline_result = _baseline_agent.diagnose(net, network_name=req.network, user_query=req.description)
+    # Note: Don't pass req.description as user_query - it's the scenario description, not a query.
+    # Passing it causes the LLM to use direct-answer format instead of diagnostic format.
+    baseline_result = _baseline_agent.diagnose(net, network_name=req.network, user_query="")
     baseline_report = baseline_result["response"]
     baseline_status = "success"
     if baseline_report.startswith("LLM call failed"):
         baseline_status = "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status)
 
-    # --- Agentic pipeline ---
+    # --- Agentic pipeline (iterative debugger) ---
     try:
-        agentic_result = _agentic_agent.diagnose(net, network_name=req.network, user_query=req.description)
-        agentic_report = agentic_result["response"]
-        agentic_status = "success"
-        if agentic_report.startswith("Agent loop error") or agentic_report.startswith("LLM call failed"):
-            agentic_status = "error"
-        agentic = _build_pipeline_result(agentic_report, agentic_status)
-        agentic["tool_calls"] = agentic_result.get("tool_calls", [])
-        agentic["conversation"] = agentic_result.get("conversation", [])
-    except Exception:
+        import copy
+        net_iter = copy.deepcopy(net)
+        iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        iter_report = iter_result["response"]
+        iter_status = "success"
+        if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
+            iter_status = "error"
+        agentic = _build_pipeline_result(iter_report, iter_status)
+        fix_history = iter_result.get("fix_history", [])
+        agentic["fixHistory"] = fix_history
+        agentic["finalConverged"] = iter_result.get("final_converged", False)
+        agentic["iterationsUsed"] = iter_result.get("iterations_used", 0)
+        agentic["toolCalls"] = fix_history
+    except Exception as e:
+        print(f"[diagnose_nl] Iterative debugger error: {e}")
         agentic = {
             "analysisStatus": "error",
             "rootCauses": [],
             "affectedComponents": [],
             "correctiveActions": [],
+            "fixHistory": [],
+            "finalConverged": False,
+            "toolCalls": [],
         }
 
     return {
@@ -828,6 +1138,7 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         "responseType": response_type,
         "textAnswer": text_answer,
     }
+
 
 
 # ---------------------

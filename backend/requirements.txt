@@ -6,3 +6,4 @@ openai
 python-dotenv
 numba
 matplotlib
+requests

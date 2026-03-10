@@ -3,34 +3,56 @@
 import { useState } from 'react';
 import { InputPanel } from './input-panel';
 import { ResultsPanel } from './results-panel';
-import { PipelineResult, PipelineId, DiagnoseNLResponse, DiagnoseResponse } from '@/types/diagnostic';
-import { runDiagnosis, runNLDiagnosis } from '@/lib/api';
+import { PipelineResult, DiagnoseNLResponse, DiagnoseResponse } from '@/types/diagnostic';
+import { runDiagnosisStream, runNLDiagnosis } from '@/lib/api';
 
 export function DiagnosticLayout() {
   const [fullResponse, setFullResponse] = useState<{ baseline: PipelineResult; agentic: PipelineResult } | null>(null);
-  const [selectedPipeline, setSelectedPipeline] = useState<PipelineId>('baseline');
   const [nlExtra, setNlExtra] = useState<DiagnoseNLResponse | null>(null);
   const [currentNetwork, setCurrentNetwork] = useState<string | null>(null);
   const [currentScenario, setCurrentScenario] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const result: PipelineResult | null = fullResponse ? fullResponse[selectedPipeline] : null;
-
-  const handleAnalyze = async (network: string, scenario: string) => {
+  const handleAnalyze = async (network: string, scenario: string, query?: string) => {
     setIsLoading(true);
     setError(null);
     setNlExtra(null);
+    setFullResponse(null);
     setCurrentNetwork(network);
     setCurrentScenario(scenario);
+    setLoadingStage('Running baseline analysis...');
+
     try {
-      const response = await runDiagnosis(network, scenario);
-      setFullResponse({ baseline: response.baseline, agentic: response.agentic });
+      await runDiagnosisStream(network, scenario, query, (event, data) => {
+        const typedData = data as PipelineResult;
+        switch (event) {
+          case 'baseline':
+            setFullResponse(prev => ({
+              baseline: typedData,
+              agentic: prev?.agentic ?? ({} as PipelineResult),
+            }));
+            setLoadingStage('Running agentic debugger...');
+            break;
+          case 'agentic':
+            setFullResponse(prev => ({
+              baseline: prev?.baseline ?? ({} as PipelineResult),
+              agentic: typedData
+            }));
+            setLoadingStage(null);
+            break;
+          case 'done':
+            setLoadingStage(null);
+            break;
+        }
+      });
     } catch {
       setError('Analysis failed. Please try again.');
       setFullResponse(null);
     } finally {
       setIsLoading(false);
+      setLoadingStage(null);
     }
   };
 
@@ -38,6 +60,7 @@ export function DiagnosticLayout() {
     setIsLoading(true);
     setError(null);
     setNlExtra(null);
+    setFullResponse(null);
     setCurrentNetwork(network);
     setCurrentScenario('nl_generated');
     try {
@@ -68,16 +91,15 @@ export function DiagnosticLayout() {
           onAnalyze={handleAnalyze}
           onAnalyzeNL={handleAnalyzeNL}
           isLoading={isLoading}
-          selectedPipeline={selectedPipeline}
-          onPipelineChange={setSelectedPipeline}
         />
       </div>
       <div className="flex-1 h-full overflow-hidden">
         <ResultsPanel
-          result={result}
-          selectedPipeline={selectedPipeline}
+          baselineResult={fullResponse?.baseline ?? null}
+          agenticResult={fullResponse?.agentic ?? null}
           nlExtra={nlExtra}
           isLoading={isLoading}
+          loadingStage={loadingStage}
           error={error}
           networkName={currentNetwork}
           scenarioName={currentScenario}

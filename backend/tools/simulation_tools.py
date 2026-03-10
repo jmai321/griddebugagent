@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import pandapower as pp
+from tools.diagnostic_tools import DiagnosticTools
 
 
 TOOL_DEFINITIONS = [
@@ -80,11 +81,23 @@ class SimulationTools:
                 element = f"trafo_{trafo_index}"
             pp.runpp(net_copy)
             converged = bool(net_copy.converged)
-            return {
+            
+            result = {
                 "element_out": element,
                 "converged": converged,
                 "message": f"N-1 ({element} out): power flow {'converged' if converged else 'did not converge'}.",
             }
+            
+            if converged:
+                violations = DiagnosticTools.check_voltage_violations(net_copy)
+                overloads = DiagnosticTools.check_overloads(net_copy)
+                result["voltage_violations"] = violations.get("total_violations", 0)
+                result["undervoltage_buses"] = violations.get("undervoltage_buses", [])
+                result["overvoltage_buses"] = violations.get("overvoltage_buses", [])
+                result["overloaded_lines"] = overloads.get("overloaded_lines", [])
+                result["overloaded_trafos"] = overloads.get("overloaded_trafos", [])
+                
+            return result
         except pp.LoadflowNotConverged:
             return {
                 "element_out": element,

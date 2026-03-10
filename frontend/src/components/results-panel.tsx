@@ -2,8 +2,8 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { PipelineResult, PipelineId, DiagnoseNLResponse } from '@/types/diagnostic';
-import { AlertCircle, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp } from 'lucide-react';
+import { PipelineResult, DiagnoseNLResponse } from '@/types/diagnostic';
+import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp, Wrench } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useState, useEffect, useCallback } from 'react';
 import { NetworkControlBoard } from './network-control-board';
@@ -11,34 +11,84 @@ import { NetworkGraph } from './network-graph';
 import { OverrideState, RawNetworkState, DiagnoseResponse } from '@/types/diagnostic';
 import { API_BASE, runReDiagnosis } from '@/lib/api';
 
-const PIPELINE_LABELS: Record<PipelineId, string> = {
-  baseline: 'Baseline (LLM only)',
-  agentic: 'Agentic (with tools)',
+// Helper component to display JSON data in a user-friendly format
+function JsonDisplay({ data }: { data: unknown }) {
+  if (data === null || data === undefined) return <span className="text-muted-foreground">None</span>;
+  if (typeof data !== 'object') {
+    if (typeof data === 'boolean') return <span>{data ? 'Yes' : 'No'}</span>;
+    return <span>{String(data)}</span>;
+  }
+
+  if (Array.isArray(data)) {
+    if (data.length === 0) return <span className="text-muted-foreground italic">Empty list</span>;
+    if (data.length > 0 && typeof data[0] !== 'object') {
+      return <span>{data.join(', ')}</span>;
+    }
+    return (
+      <ul className="list-disc pl-4 space-y-1 mt-1">
+        {data.map((item, i) => (
+          <li key={i}><JsonDisplay data={item} /></li>
+        ))}
+      </ul>
+    );
+  }
+
+  const entries = Object.entries(data);
+  if (entries.length === 0) return <span className="text-muted-foreground italic">Empty object</span>;
+
+  return (
+    <div className="space-y-1.5 mt-1">
+      {entries.map(([key, value]) => {
+        if (key === 'action' || key === 'rationale' || key === 'iteration') return null;
+        const friendlyKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        return (
+          <div key={key} className="flex flex-col sm:flex-row sm:gap-2 items-start text-xs">
+            <span className="font-semibold text-foreground/80 min-w-[140px]">{friendlyKey}:</span>
+            <div className="flex-1 text-muted-foreground break-words">
+              <JsonDisplay data={value} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type TabId = 'baseline' | 'agentic';
+
+const TAB_LABELS: Record<TabId, string> = {
+  baseline: 'Baseline',
+  agentic: 'Agentic',
 };
 
 interface ResultsPanelProps {
-  result: PipelineResult | null;
-  selectedPipeline: PipelineId;
+  baselineResult: PipelineResult | null;
+  agenticResult: PipelineResult | null;
   nlExtra: DiagnoseNLResponse | null;
   isLoading: boolean;
+  loadingStage: string | null;
   error: string | null;
   networkName: string | null;
   scenarioName: string | null;
   onDiagnosisUpdate?: (response: DiagnoseResponse) => void;
 }
 
-export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, error, networkName, scenarioName, onDiagnosisUpdate }: ResultsPanelProps) {
+export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading, loadingStage, error, networkName, scenarioName, onDiagnosisUpdate }: ResultsPanelProps) {
+  const [activeTab, setActiveTab] = useState<TabId>('baseline');
   const [codeExpanded, setCodeExpanded] = useState(false);
   const [networkState, setNetworkState] = useState<RawNetworkState | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
   const [isReDiagnosing, setIsReDiagnosing] = useState(false);
   const [lastSimulationConverged, setLastSimulationConverged] = useState<boolean | null>(null);
 
+  // Compute active result based on selected tab
+  const result = activeTab === 'baseline' ? baselineResult : agenticResult;
+  const hasAnyResult = baselineResult || agenticResult;
+
   // Fetch network state helper
   const fetchNetworkState = useCallback(async (overrides?: OverrideState) => {
     if (!networkName) return;
 
-    // Get LLM-parsed affected components for highlighting
     const llmAffectedComponents = result?.parsedAffectedComponents || null;
 
     try {
@@ -56,7 +106,6 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
       if (res.ok) {
         const data = await res.json();
         setNetworkState(data);
-        // Track convergence status when simulating with overrides
         if (overrides) {
           setLastSimulationConverged(data.converged ?? false);
         }
@@ -66,7 +115,6 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
     }
   }, [networkName, scenarioName, nlExtra?.generatedCode, result?.parsedAffectedComponents]);
 
-  // Fetch the raw network state when a valid scenario result is loaded
   useEffect(() => {
     if (!isLoading && (result || nlExtra) && networkName) {
       fetchNetworkState();
@@ -101,11 +149,11 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
     }
   };
 
-  if (isLoading) {
+  if (isLoading && !result) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-6" role="status" aria-label="Loading">
         <Loader2 className="h-10 w-10 text-muted-foreground animate-spin mb-4" />
-        <p className="text-muted-foreground">Analyzing power flow failure...</p>
+        <p className="text-muted-foreground">{loadingStage || 'Analyzing power flow failure...'}</p>
       </div>
     );
   }
@@ -120,7 +168,7 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
     );
   }
 
-  if (!result) {
+  if (!hasAnyResult) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-6 text-center">
         <AlertCircle className="h-12 w-12 text-muted-foreground mb-4" />
@@ -134,18 +182,79 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
 
   return (
     <div className="flex flex-col h-full p-6 overflow-y-auto">
+      {/* Streaming progress banner */}
+      {isLoading && loadingStage && (
+        <div className="mb-4 flex items-center gap-2 p-3 rounded-lg bg-primary/5 border border-primary/20 text-sm">
+          <Loader2 className="h-4 w-4 text-primary animate-spin flex-shrink-0" />
+          <span className="text-primary font-medium">{loadingStage}</span>
+        </div>
+      )}
+
+      {/* Header with tabs */}
       <div className="mb-6">
-        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <h2 className="text-xl font-semibold">Diagnostic Results</h2>
-          <Badge variant="outline" className="font-normal">
-            {PIPELINE_LABELS[selectedPipeline]}
-          </Badge>
+          {/* Convergence indicator */}
+          {result && (() => {
+            const converged = activeTab === 'agentic'
+              ? result.finalConverged
+              : networkState?.converged;
+            if (converged === true) {
+              return (
+                <Badge className="flex items-center gap-1 bg-green-600 text-white">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Converged
+                </Badge>
+              );
+            } else if (converged === false) {
+              return (
+                <Badge className="flex items-center gap-1 bg-destructive text-white">
+                  <AlertCircle className="h-3 w-3" />
+                  Did not converge
+                </Badge>
+              );
+            } else {
+              return (
+                <Badge variant="outline" className="flex items-center gap-1 text-muted-foreground">
+                  <span className="h-3 w-3">○</span>
+                  Convergence unknown
+                </Badge>
+              );
+            }
+          })()}
+        </div>
+
+        {/* Tab buttons */}
+        <div className="flex rounded-lg border border-border overflow-hidden">
+          {(['baseline', 'agentic'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              disabled={tab === 'baseline' ? !baselineResult : !agenticResult}
+              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === tab
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
+              } ${(tab === 'baseline' ? !baselineResult : !agenticResult) ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              {TAB_LABELS[tab]}
+              {(tab === 'baseline' ? !baselineResult : !agenticResult) && isLoading && ' ...'}
+            </button>
+          ))}
         </div>
       </div>
 
-      <div className="space-y-6">
+      {/* Show loading state if current tab result is not yet available */}
+      {!result && (
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <Loader2 className="h-8 w-8 text-muted-foreground animate-spin mb-4" />
+          <p className="text-muted-foreground">Loading {TAB_LABELS[activeTab]} results...</p>
+        </div>
+      )}
+
+      {result && <div className="space-y-6">
         {/* Simple Text Answer Card */}
-        {nlExtra?.textAnswer && (
+        {nlExtra?.textAnswer && nlExtra.responseType !== 'direct_answer' && (
           <Card className="border-secondary mb-4">
             <CardHeader className="pb-3">
               <CardTitle className="text-lg">Agent Response</CardTitle>
@@ -158,39 +267,6 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
           </Card>
         )}
 
-        {/* Network Visualization and Control Board */}
-        {networkState && (!nlExtra || nlExtra.responseType !== 'text_only') && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card className="lg:col-span-2">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-lg">Network Visualization</CardTitle>
-                <CardDescription>
-                  Interactive graph with affected components highlighted
-                  {networkState.converged === false && (
-                    <span className="ml-2 text-destructive">(Power flow did not converge)</span>
-                  )}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="p-0 h-[500px] relative">
-                <NetworkGraph
-                  networkState={networkState}
-                  isLoading={isSimulating}
-                />
-              </CardContent>
-            </Card>
-
-            <div className="h-[600px] lg:h-auto">
-              <NetworkControlBoard
-                networkState={networkState}
-                onApplyOverrides={handleApplyOverrides}
-                onReDiagnose={handleReDiagnose}
-                isLoading={isSimulating}
-                isReDiagnosing={isReDiagnosing}
-                lastSimulationConverged={lastSimulationConverged}
-              />
-            </div>
-          </div>
-        )}
         {/* Generated Scenario Card (NL mode only) */}
         {nlExtra && nlExtra.generationStatus === 'success' && nlExtra.responseType === 'full_diagnosis' && (
           <Card className="border-primary/30">
@@ -254,6 +330,179 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
           </Card>
         )}
 
+        {/* Network Visualization and Control Board - Only for Baseline tab */}
+        {activeTab === 'baseline' && networkState && (!nlExtra || nlExtra.responseType !== 'text_only') && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <Card className="lg:col-span-2">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg">Network Visualization</CardTitle>
+                <CardDescription>
+                  Interactive graph with affected components highlighted
+                  {networkState.converged === false && (
+                    <span className="ml-2 text-destructive">(Power flow did not converge)</span>
+                  )}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-0 h-[500px] relative">
+                <NetworkGraph
+                  networkState={networkState}
+                  isLoading={isSimulating}
+                />
+              </CardContent>
+            </Card>
+
+            <div className="h-[600px] lg:h-auto">
+              <NetworkControlBoard
+                networkState={networkState}
+                onApplyOverrides={handleApplyOverrides}
+                onReDiagnose={handleReDiagnose}
+                isLoading={isSimulating}
+                isReDiagnosing={isReDiagnosing}
+                lastSimulationConverged={lastSimulationConverged}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Agent reasoning: tool calls (agentic only) */}
+        {activeTab === 'agentic' && result.toolCalls && result.toolCalls.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Wrench className="h-5 w-5 text-muted-foreground" />
+                Agent Reasoning Steps
+              </CardTitle>
+              <CardDescription>
+                Tool calls and results from the diagnostic agent
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {result.toolCalls.map((tc, idx) => (
+                <div key={idx} className="rounded-lg border border-border bg-card p-3 space-y-2">
+                  <div className="flex items-center gap-2 font-medium text-sm">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs">
+                      {idx + 1}
+                    </span>
+                    <span>Step {idx + 1}</span>
+                  </div>
+                  <div className="pl-8 text-sm">
+                    <p className="text-muted-foreground mb-1">
+                      <span className="font-medium text-foreground">Tool:</span>{' '}
+                      <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{tc.tool}</code>
+                      {Object.keys(tc.args || {}).length > 0 && (
+                        <span className="text-muted-foreground ml-1">
+                          ({JSON.stringify(tc.args)})
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-muted-foreground">
+                      <span className="font-medium text-foreground">Result:</span>{' '}
+                      <span className="font-mono text-xs break-all">
+                        {typeof tc.result === 'object'
+                          ? JSON.stringify(tc.result).length > 200
+                            ? JSON.stringify(tc.result).slice(0, 200) + '...'
+                            : JSON.stringify(tc.result)
+                          : String(tc.result)}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Reasoning quality checks (agentic only) */}
+        {activeTab === 'agentic' && result.reasoningQuality && result.reasoningQuality.checks.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Reasoning Quality</CardTitle>
+              <CardDescription>
+                Heuristic checks: does the agent&apos;s tool usage support the report?
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm font-medium mb-3">{result.reasoningQuality.summary}</p>
+              <ul className="space-y-2 text-sm">
+                {result.reasoningQuality.checks.map((c) => (
+                  <li key={c.id} className="flex items-start gap-2">
+                    <span className={c.passed ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}>
+                      {c.passed ? '✓' : '○'}
+                    </span>
+                    <span className={c.passed ? 'text-muted-foreground' : ''}>{c.message}</span>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Fix History (agentic only - from iterative debugger) */}
+        {activeTab === 'agentic' && result.fixHistory && result.fixHistory.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Wrench className="h-5 w-5 text-muted-foreground" />
+                Fix History
+                {result.finalConverged !== undefined && (
+                  <Badge variant={result.finalConverged ? 'default' : 'destructive'} className="ml-auto">
+                    {result.finalConverged ? '✓ Converged' : '✗ Not converged'}
+                  </Badge>
+                )}
+              </CardTitle>
+              <CardDescription>
+                Corrective actions applied by the agent
+                {result.iterationsUsed !== undefined && ` (${result.iterationsUsed} iterations)`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {result.fixHistory.map((fix: Record<string, unknown>, idx: number) => {
+                  const actionName = fix.action || fix.tool || 'unknown';
+                  const description = fix.rationale || fix.message ||
+                    (fix.result && typeof fix.result === 'object' ? (fix.result as Record<string, unknown>).message : null) || '';
+                  const hasResult = fix.result != null;
+                  const resultObj = typeof fix.result === 'string' ? { message: fix.result } : fix.result;
+
+                  return (
+                    <div key={idx} className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/30">
+                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold">
+                        {idx + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-sm font-medium font-mono">{String(actionName)}</span>
+                          {fix.iteration !== undefined && (
+                            <span className="text-xs text-muted-foreground ml-1">(Loop {String(fix.iteration)})</span>
+                          )}
+                          {fix.success !== undefined && (
+                            <Badge variant={fix.success ? 'outline' : 'destructive'} className="text-xs">
+                              {fix.success ? 'applied' : 'failed'}
+                            </Badge>
+                          )}
+                        </div>
+                        {description && (
+                          <p className="text-sm text-muted-foreground">{String(description)}</p>
+                        )}
+                        {hasResult && (
+                          <details className="mt-2 group border border-border/50 rounded-md">
+                            <summary className="text-xs font-medium cursor-pointer text-muted-foreground hover:text-foreground bg-muted/30 px-3 py-1.5 rounded-t-md">
+                              Details
+                            </summary>
+                            <div className="p-3 bg-muted/10 border-t border-border/50 overflow-auto max-h-[250px]">
+                              <JsonDisplay data={resultObj} />
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Full Diagnosis Results */}
         {(!nlExtra || nlExtra.responseType === 'full_diagnosis') && (
           <>
@@ -263,14 +512,12 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
                   <AlertCircle className="h-5 w-5 text-destructive" />
                   Root Causes
                 </CardTitle>
-                <CardDescription>
-                  Identified failure mechanisms
-                </CardDescription>
+                <CardDescription>Identified failure mechanisms</CardDescription>
               </CardHeader>
               <CardContent>
-                {result.rootCauses.length > 0 ? (
+                {(result.rootCauses ?? []).length > 0 ? (
                   <ul className="space-y-2">
-                    {result.rootCauses.map((cause, index) => (
+                    {(result.rootCauses ?? []).map((cause, index) => (
                       <li key={index} className="flex items-start gap-2">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
                         <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
@@ -288,17 +535,15 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
-                  <Zap className="h-5 w-5 text-warning" />
+                  <Zap className="h-5 w-5 text-yellow-500" />
                   Affected Components
                 </CardTitle>
-                <CardDescription>
-                  System components involved in the failure
-                </CardDescription>
+                <CardDescription>System components involved in the failure</CardDescription>
               </CardHeader>
               <CardContent>
-                {result.affectedComponents.length > 0 ? (
+                {(result.affectedComponents ?? []).length > 0 ? (
                   <ul className="space-y-2">
-                    {result.affectedComponents.map((component, index) => (
+                    {(result.affectedComponents ?? []).map((component, index) => (
                       <li key={index} className="flex items-start gap-2">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
                         <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
@@ -319,14 +564,12 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
                   <Lightbulb className="h-5 w-5 text-muted-foreground" />
                   Recommendations
                 </CardTitle>
-                <CardDescription>
-                  Suggested actions to address the failure
-                </CardDescription>
+                <CardDescription>Suggested actions to address the failure</CardDescription>
               </CardHeader>
               <CardContent>
-                {result.correctiveActions.length > 0 ? (
+                {(result.correctiveActions ?? []).length > 0 ? (
                   <ul className="space-y-2">
-                    {result.correctiveActions.map((action, index) => (
+                    {(result.correctiveActions ?? []).map((action, index) => (
                       <li key={index} className="flex items-start gap-2">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
                         <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
@@ -342,7 +585,25 @@ export function ResultsPanel({ result, selectedPipeline, nlExtra, isLoading, err
             </Card>
           </>
         )}
-      </div>
+
+        {/* Direct Answer Results */}
+        {nlExtra && nlExtra.responseType === 'direct_answer' && result.rawResult && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                Analytical Summary
+              </CardTitle>
+              <CardDescription>Direct response to your query</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                <ReactMarkdown>{result.rawResult}</ReactMarkdown>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>}
     </div>
   );
 }

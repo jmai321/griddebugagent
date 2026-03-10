@@ -16,14 +16,58 @@ export async function fetchScenarios(): Promise<Scenario[]> {
   return data.scenarios;
 }
 
-export async function runDiagnosis(network: string, scenario: string): Promise<DiagnoseResponse> {
-  const res = await fetch(`${API_BASE}/diagnose`, {
+/**
+ * Stream diagnosis results via SSE — each pipeline arrives as a separate event.
+ * Events: 'baseline', 'agentic', 'done'.
+ */
+export async function runDiagnosisStream(
+  network: string,
+  scenario: string,
+  query: string | undefined,
+  onEvent: (event: string, data: unknown) => void,
+): Promise<void> {
+  const body: { network: string; scenario: string; query?: string } = { network, scenario };
+  if (query?.trim()) body.query = query.trim();
+
+  const res = await fetch(`${API_BASE}/diagnose_stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ network, scenario }),
+    body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error('Diagnosis request failed');
-  return res.json();
+
+  if (!res.ok) throw new Error('Streaming diagnosis request failed');
+  if (!res.body) throw new Error('No response body');
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE events from buffer
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() || ''; // keep incomplete chunk
+
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      let eventName = 'message';
+      let dataStr = '';
+      for (const line of part.split('\n')) {
+        if (line.startsWith('event: ')) eventName = line.slice(7).trim();
+        else if (line.startsWith('data: ')) dataStr = line.slice(6);
+      }
+      if (dataStr) {
+        try {
+          const data = JSON.parse(dataStr);
+          onEvent(eventName, data);
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
 }
 
 export async function runNLDiagnosis(network: string, description: string): Promise<DiagnoseNLResponse> {

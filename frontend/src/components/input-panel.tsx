@@ -4,22 +4,15 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Network, Scenario, PipelineId } from '@/types/diagnostic';
+import { Network, Scenario } from '@/types/diagnostic';
 import { fetchNetworks, fetchScenarios } from '@/lib/api';
 
 type InputMode = 'preset' | 'nl';
 
-const PIPELINE_OPTIONS: { id: PipelineId; label: string }[] = [
-  { id: 'baseline', label: 'Baseline (LLM only)' },
-  { id: 'agentic', label: 'Agentic (with tools)' },
-];
-
 interface InputPanelProps {
-  onAnalyze: (network: string, scenario: string) => void;
+  onAnalyze: (network: string, scenario: string, query?: string) => void;
   onAnalyzeNL: (network: string, description: string) => void;
   isLoading: boolean;
-  selectedPipeline: PipelineId;
-  onPipelineChange: (pipeline: PipelineId) => void;
 }
 
 const EXAMPLE_PROMPTS = [
@@ -30,7 +23,7 @@ const EXAMPLE_PROMPTS = [
   'Reduce thermal limits of all lines to 25% of original',
 ];
 
-export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline, onPipelineChange }: InputPanelProps) {
+export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProps) {
   const [networks, setNetworks] = useState<Network[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [selectedNetwork, setSelectedNetwork] = useState<string>('');
@@ -38,6 +31,7 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [mode, setMode] = useState<InputMode>('nl');
   const [nlDescription, setNlDescription] = useState<string>('');
+  const [presetQuery, setPresetQuery] = useState<string>(''); // optional benchmark/user query for preset mode
 
   useEffect(() => {
     async function loadData() {
@@ -59,7 +53,7 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline
   const handleAnalyze = () => {
     if (mode === 'preset') {
       if (selectedNetwork && selectedScenario) {
-        onAnalyze(selectedNetwork, selectedScenario);
+        onAnalyze(selectedNetwork, selectedScenario, presetQuery.trim() || undefined);
       }
     } else {
       if (selectedNetwork && nlDescription.trim()) {
@@ -112,30 +106,6 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline
             📋 Preset Scenarios
           </button>
         </div>
-
-        {/* Pipeline: which result to show (baseline vs agentic) */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Diagnosis Pipeline</CardTitle>
-            <CardDescription>
-              Baseline uses only the LLM. Agentic uses rules + tools (query, simulation, diagnostics).
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Select value={selectedPipeline} onValueChange={(v) => onPipelineChange(v as PipelineId)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PIPELINE_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.id} value={opt.id}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
 
         {/* Network Selector (shown in both modes) */}
         <Card>
@@ -194,6 +164,21 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading, selectedPipeline
                   Category: {selectedScenarioData.category}
                 </div>
               )}
+
+              <div>
+                <label className="text-sm font-medium text-muted-foreground block mb-1">
+                  Optional: Benchmark / user query
+                </label>
+                <textarea
+                  className="w-full min-h-[60px] p-2 rounded-md border border-input bg-background text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                  placeholder="e.g. Find top 5 heavily loaded lines; Run contingency analysis..."
+                  value={presetQuery}
+                  onChange={(e) => setPresetQuery(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Used for paper benchmark or task-focused evaluation (run power flow, find overloads, etc.)
+                </p>
+              </div>
             </CardContent>
           </Card>
         )}

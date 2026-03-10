@@ -914,6 +914,7 @@ def run_rediagnose(req: ReDiagnoseRequest):
         net_iter = copy.deepcopy(net)
         # Capture before state (broken network)
         before_state = _serialize_network_state(net_iter, run_pf=False)
+        before_state["affected_components"] = baseline.get("parsedAffectedComponents", {})
         iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
         # Capture after state (fixed network)
         after_state = _serialize_network_state(net_iter, run_pf=False)
@@ -999,6 +1000,7 @@ def run_diagnose(req: DiagnoseRequest):
         net_iter = copy.deepcopy(net)
         # Capture before state (broken network)
         before_state = _serialize_network_state(net_iter, run_pf=False)
+        before_state["affected_components"] = baseline.get("parsedAffectedComponents", {})
         iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
         # Capture after state (fixed network)
         after_state = _serialize_network_state(net_iter, run_pf=False)
@@ -1078,13 +1080,14 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
                     "correctiveActions": [], "rawResult": str(e)}
 
-    def _run_agentic(scenario_id, network_name):
+    def _run_agentic(scenario_id, network_name, affected_components=None):
         """Run iterative debugger as the agentic pipeline."""
         try:
             s, _ = _find_and_apply_scenario(scenario_id, network_name)
             s.run_pf()
             # Capture before state (broken network)
             before_state = _serialize_network_state(s.net, run_pf=False)
+            before_state["affected_components"] = affected_components or {}
             r = _iterative_agent.diagnose(s.net, network_name=network_name)
             # Capture after state (fixed network)
             after_state = _serialize_network_state(s.net, run_pf=False)
@@ -1133,7 +1136,7 @@ async def run_diagnose_stream(req: DiagnoseRequest):
         yield _sse_event("baseline", baseline)
 
         # 2) Agentic (using iterative debugger)
-        agentic = await asyncio.to_thread(_run_agentic, req.scenario, req.network)
+        agentic = await asyncio.to_thread(_run_agentic, req.scenario, req.network, baseline.get("parsedAffectedComponents", {}))
         yield _sse_event("agentic", agentic)
 
         # 3) Done
@@ -1250,7 +1253,9 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         net_iter = copy.deepcopy(net)
         # Capture before state (broken network)
         before_state = _serialize_network_state(net_iter, run_pf=False)
-        iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        before_state["affected_components"] = baseline.get("parsedAffectedComponents", {})
+        agent_query = req.description if response_type == "direct_answer" else ""
+        iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network, user_query=agent_query)
         # Capture after state (fixed network)
         after_state = _serialize_network_state(net_iter, run_pf=False)
         iter_report = iter_result["response"]

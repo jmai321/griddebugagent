@@ -55,14 +55,13 @@ USER_PROMPT_TEMPLATE = """\
 == NETWORK: {network_name} ==
 == FAILURE CATEGORY: {failure_category} ==
 
-== PREPROCESSED EVIDENCE ==
+{user_query_section}== PREPROCESSED EVIDENCE ==
 {evidence_text}
 
 == TRIGGERED RULES ==
 {rules_text}
 
-Please diagnose the issue and iteratively apply fixes until the power flow \
-converges without violations, or until you've exhausted reasonable corrections.
+{task_instruction}
 """
 
 
@@ -77,9 +76,14 @@ class IterativeDebuggerAgent:
         self.preprocessor = Preprocessor()
         self.max_iterations = max_iterations
 
-    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown") -> dict[str, Any]:
+    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown", user_query: str = "") -> dict[str, Any]:
         """
         Run iterative diagnosis + fix loop.
+
+        Args:
+            user_query: Optional user question. When provided for direct_answer
+                        queries, the agent uses query tools to answer instead of
+                        running the full fix loop.
 
         Returns:
             dict with keys: "level", "response", "fix_history",
@@ -93,11 +97,26 @@ class IterativeDebuggerAgent:
 
         # Build prompt
         rules_text = self._format_rules(context["triggered_rules"])
+        if user_query:
+            user_query_section = f"== USER QUERY ==\n{user_query}\n\n"
+            task_instruction = (
+                "Please answer the user query above using the available query tools. "
+                "Call the appropriate tools to retrieve the requested information, "
+                "then provide a clear, concise answer."
+            )
+        else:
+            user_query_section = ""
+            task_instruction = (
+                "Please diagnose the issue and iteratively apply fixes until the power flow "
+                "converges without violations, or until you've exhausted reasonable corrections."
+            )
         user_prompt = USER_PROMPT_TEMPLATE.format(
             network_name=network_name,
             failure_category=context["failure_category"],
             evidence_text=context["evidence_text"],
             rules_text=rules_text,
+            user_query_section=user_query_section,
+            task_instruction=task_instruction,
         )
 
         # Generate initial diagnosis from preprocessor context
@@ -111,10 +130,14 @@ class IterativeDebuggerAgent:
         ]
 
         if self.llm_client is None:
-            # Run automated fix strategy  without LLM
-            final_response, fix_history = self._automated_fix_loop(
-                net, context, network_name
-            )
+            if user_query:
+                final_response = f"No LLM available to answer: {user_query}"
+                fix_history = []
+            else:
+                # Run automated fix strategy without LLM
+                final_response, fix_history = self._automated_fix_loop(
+                    net, context, network_name
+                )
         else:
             final_response = self._llm_fix_loop(
                 net, conversation, fix_history

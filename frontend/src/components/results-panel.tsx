@@ -365,88 +365,102 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
         )}
 
         {/* Agent Actions (unified tool calls + fixes, agentic only) */}
-        {activeTab === 'agentic' && result.agentActions && result.agentActions.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Activity className="h-5 w-5 text-muted-foreground" />
-                Agent Actions
-                <span className="text-sm font-normal text-muted-foreground ml-auto">
-                  {result.agentActions.length} action{result.agentActions.length !== 1 ? 's' : ''}
-                </span>
-              </CardTitle>
-              <CardDescription>
-                Chronological list of diagnostic and corrective actions
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {result.agentActions.map((action, idx) => {
-                const toolName = action.tool || action.action || 'unknown';
-                const phaseBadgeColor = action.phase === 'diagnostic' ? 'bg-blue-500/10 text-blue-600' :
-                                        action.phase === 'fix' ? 'bg-green-500/10 text-green-600' :
-                                        action.phase === 'verify' ? 'bg-purple-500/10 text-purple-600' :
-                                        'bg-muted text-muted-foreground';
-                const hasReasoning = action.reasoning && action.reasoning.trim();
-                const hasRationale = action.rationale && action.rationale.trim();
-                const hasResult = action.result != null;
+        {activeTab === 'agentic' && result.agentActions && result.agentActions.length > 0 && (() => {
+          // Group actions by iteration
+          const groupedByIteration = result.agentActions.reduce((acc, action) => {
+            const iter = action.iteration ?? 0;
+            if (!acc[iter]) acc[iter] = [];
+            acc[iter].push(action);
+            return acc;
+          }, {} as Record<number, typeof result.agentActions>);
 
-                return (
-                  <div key={idx} className="rounded-lg border border-border bg-card p-3 space-y-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold flex-shrink-0">
-                        {idx + 1}
-                      </span>
-                      <code className="text-sm font-medium bg-muted px-2 py-0.5 rounded">{toolName}</code>
-                      {action.phase && (
-                        <Badge variant="outline" className={`text-xs ${phaseBadgeColor}`}>
-                          {action.phase}
-                        </Badge>
-                      )}
-                      {action.success !== undefined && (
-                        <Badge variant={action.success ? 'outline' : 'destructive'} className="text-xs">
-                          {action.success ? 'applied' : 'failed'}
-                        </Badge>
-                      )}
-                      <span className="text-xs text-muted-foreground ml-auto">
-                        iteration {action.iteration}
-                      </span>
-                    </div>
+          const iterations = Object.keys(groupedByIteration).map(Number).sort((a, b) => a - b);
 
-                    {/* LLM Reasoning (if present) */}
-                    {hasReasoning && (
-                      <div className="pl-8 text-sm">
-                        <p className="text-muted-foreground italic border-l-2 border-primary/30 pl-3">
-                          {action.reasoning}
-                        </p>
-                      </div>
-                    )}
+          return (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Activity className="h-5 w-5 text-muted-foreground" />
+                  Agent Actions
+                  <span className="text-sm font-normal text-muted-foreground ml-auto">
+                    {iterations.length} iteration{iterations.length !== 1 ? 's' : ''} • {result.agentActions.length} action{result.agentActions.length !== 1 ? 's' : ''}
+                  </span>
+                </CardTitle>
+                <CardDescription>
+                  Grouped by iteration - expand to see details
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {iterations.map((iterNum, iterIdx) => {
+                  const actions = groupedByIteration[iterNum];
+                  const firstAction = actions[0];
+                  const reasoning = firstAction?.reasoning?.trim() || firstAction?.rationale?.trim() || null;
+                  const isDefaultOpen = iterIdx < 2; // First 2 iterations expanded by default
 
-                    {/* Rationale for automated fixes */}
-                    {hasRationale && !hasReasoning && (
-                      <div className="pl-8 text-sm">
-                        <p className="text-muted-foreground">
-                          {action.rationale}
-                        </p>
-                      </div>
-                    )}
+                  return (
+                    <details key={iterNum} open={isDefaultOpen} className="group rounded-lg border border-border bg-card">
+                      <summary className="flex items-center gap-2 p-3 cursor-pointer hover:bg-muted/30 transition-colors">
+                        <ChevronDown className="h-4 w-4 text-muted-foreground group-open:rotate-180 transition-transform flex-shrink-0" />
+                        <span className="font-medium text-sm">Iteration {iterNum}</span>
+                        <span className="text-xs text-muted-foreground">
+                          ({actions.length} action{actions.length !== 1 ? 's' : ''})
+                        </span>
+                      </summary>
 
-                    {/* Collapsible result details */}
-                    {hasResult && (
-                      <details className="pl-8 group">
-                        <summary className="text-xs font-medium cursor-pointer text-muted-foreground hover:text-foreground">
-                          View result details
-                        </summary>
-                        <div className="mt-2 p-2 bg-muted/30 rounded-md overflow-auto max-h-[200px]">
-                          <JsonDisplay data={action.result} />
+                      <div className="px-3 pb-3 space-y-3">
+                        {/* Reasoning shown once per iteration */}
+                        {reasoning && (
+                          <div className="text-sm border-l-2 border-primary/30 pl-3 prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-li:my-0 text-muted-foreground">
+                            <ReactMarkdown>{reasoning}</ReactMarkdown>
+                          </div>
+                        )}
+
+                        {/* Tool calls in this iteration */}
+                        <div className="rounded-md border border-border/50 divide-y divide-border/50">
+                          {actions.map((action, actionIdx) => {
+                            const toolName = action.tool || action.action || 'unknown';
+                            const phaseBadgeColor = action.phase === 'diagnostic' ? 'bg-blue-500/10 text-blue-600' :
+                                                    action.phase === 'fix' ? 'bg-green-500/10 text-green-600' :
+                                                    action.phase === 'verify' ? 'bg-purple-500/10 text-purple-600' :
+                                                    'bg-muted text-muted-foreground';
+                            const hasResult = action.result != null;
+
+                            return (
+                              <details key={actionIdx} className="group/tool">
+                                <summary className="flex items-center gap-2 px-3 py-2 bg-muted/20 cursor-pointer hover:bg-muted/40 transition-colors list-none">
+                                  {hasResult && (
+                                    <ChevronDown className="h-3 w-3 text-muted-foreground -rotate-90 group-open/tool:rotate-0 transition-transform flex-shrink-0" />
+                                  )}
+                                  {!hasResult && <span className="w-3" />}
+                                  <code className="text-xs font-medium bg-background px-1.5 py-0.5 rounded border border-border/50">{toolName}</code>
+                                  {action.phase && (
+                                    <Badge variant="outline" className={`text-xs ${phaseBadgeColor}`}>
+                                      {action.phase}
+                                    </Badge>
+                                  )}
+                                  {action.success !== undefined && (
+                                    <Badge variant={action.success ? 'outline' : 'destructive'} className="text-xs">
+                                      {action.success ? 'applied' : 'failed'}
+                                    </Badge>
+                                  )}
+                                </summary>
+                                {hasResult && (
+                                  <div className="px-3 py-2 bg-muted/10 border-t border-border/30 overflow-auto max-h-[250px]">
+                                    <JsonDisplay data={action.result} />
+                                  </div>
+                                )}
+                              </details>
+                            );
+                          })}
                         </div>
-                      </details>
-                    )}
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
-        )}
+                      </div>
+                    </details>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* Final State (agentic only) */}
         {activeTab === 'agentic' && result.finalState && (

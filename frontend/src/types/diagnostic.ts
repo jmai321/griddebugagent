@@ -20,12 +20,45 @@ export interface ParsedAffectedComponents {
   ext_grid?: number[];
 }
 
+/** Phase classification for agent actions. */
+export type ActionPhase = 'diagnostic' | 'fix' | 'verify';
+
 /** One tool invocation during agentic reasoning. */
 export interface AgentToolCall {
   iteration: number;
   tool: string;
   args: Record<string, unknown>;
   result: unknown;
+  reasoning?: string;
+  phase?: ActionPhase;
+}
+
+/** Unified agent action with reasoning and phase. */
+export interface AgentAction {
+  iteration: number;
+  tool?: string;
+  action?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  reasoning?: string;
+  rationale?: string;
+  phase?: ActionPhase;
+  success?: boolean;
+}
+
+/** Initial diagnosis extracted from preprocessor before fixes. */
+export interface InitialDiagnosis {
+  root_causes: string[];
+  affected_components: string[];
+  failure_category: string;
+  converged_initially: boolean;
+}
+
+/** Final state after all fixes applied. */
+export interface FinalState {
+  converged: boolean;
+  remaining_violations: string[];
+  is_healthy: boolean;
 }
 
 export interface PipelineResult {
@@ -52,6 +85,12 @@ export interface PipelineResult {
   finalConverged?: boolean;
   /** Number of fix iterations used (iterative only). */
   iterationsUsed?: number;
+  /** Initial diagnosis from preprocessor before fixes (agentic only). */
+  initialDiagnosis?: InitialDiagnosis;
+  /** Unified list of agent actions with reasoning and phase (agentic only). */
+  agentActions?: AgentAction[];
+  /** Final state after all fixes applied (agentic only). */
+  finalState?: FinalState;
 }
 
 // Only 2 tabs: Baseline (manual) and Agentic (auto-fix)

@@ -23,7 +23,6 @@ from scenarios import (
 )
 from scenarios.base_scenarios import load_network
 from agents.baseline import BaselineAgent
-from agents.agentic_pipeline import AgenticPipelineAgent
 from agents.iterative_debugger import IterativeDebuggerAgent
 from scenarios.nl_scenario_generator import NLScenarioGenerator
 
@@ -48,7 +47,6 @@ app.add_middleware(
 _openai_key = os.getenv("OPENAI_API_KEY", "")
 _llm_client = OpenAI(api_key=_openai_key) if _openai_key else None
 _baseline_agent = BaselineAgent(llm_client=_llm_client)
-_agentic_agent = AgenticPipelineAgent(llm_client=_llm_client)
 _iterative_agent = IterativeDebuggerAgent(llm_client=_llm_client)
 _nl_generator = NLScenarioGenerator(llm_client=_llm_client)
 
@@ -783,6 +781,10 @@ def run_rediagnose(req: ReDiagnoseRequest):
         agentic["finalConverged"] = iter_result.get("final_converged", False)
         agentic["iterationsUsed"] = iter_result.get("iterations_used", 0)
         agentic["toolCalls"] = fix_history
+        # New structured fields
+        agentic["initialDiagnosis"] = iter_result.get("initial_diagnosis", {})
+        agentic["agentActions"] = iter_result.get("agent_actions", [])
+        agentic["finalState"] = iter_result.get("final_state", {})
     except Exception as e:
         print(f"[REDIAGNOSE] Agentic error: {e}")
         agentic = {
@@ -794,6 +796,9 @@ def run_rediagnose(req: ReDiagnoseRequest):
             "fixHistory": [],
             "finalConverged": False,
             "toolCalls": [],
+            "initialDiagnosis": {},
+            "agentActions": [],
+            "finalState": {},
         }
 
     return {"baseline": baseline, "agentic": agentic}
@@ -846,6 +851,10 @@ def run_diagnose(req: DiagnoseRequest):
         agentic["finalConverged"] = iter_result.get("final_converged", False)
         agentic["iterationsUsed"] = iter_result.get("iterations_used", 0)
         agentic["toolCalls"] = fix_history
+        # New structured fields
+        agentic["initialDiagnosis"] = iter_result.get("initial_diagnosis", {})
+        agentic["agentActions"] = iter_result.get("agent_actions", [])
+        agentic["finalState"] = iter_result.get("final_state", {})
         # Compute reasoning quality
         agentic["reasoningQuality"] = _evaluate_reasoning_quality(
             fix_history,
@@ -860,6 +869,9 @@ def run_diagnose(req: DiagnoseRequest):
             "affectedComponents": [],
             "correctiveActions": [],
             "toolCalls": [],
+            "initialDiagnosis": {},
+            "agentActions": [],
+            "finalState": {},
             "reasoningQuality": {"checks": [], "summary": f"Agent failed: {e}", "passedCount": 0, "totalCount": 0},
         }
 
@@ -915,6 +927,10 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             out["finalConverged"] = r.get("final_converged", False)
             out["iterationsUsed"] = r.get("iterations_used", 0)
             out["toolCalls"] = fix_history
+            # New structured fields
+            out["initialDiagnosis"] = r.get("initial_diagnosis", {})
+            out["agentActions"] = r.get("agent_actions", [])
+            out["finalState"] = r.get("final_state", {})
             # Compute reasoning quality
             out["reasoningQuality"] = _evaluate_reasoning_quality(
                 fix_history,
@@ -928,7 +944,8 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             traceback.print_exc()
             return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
                     "correctiveActions": [], "fixHistory": [], "finalConverged": False,
-                    "iterationsUsed": 0, "toolCalls": [], "error": str(e)}
+                    "iterationsUsed": 0, "toolCalls": [], "initialDiagnosis": {},
+                    "agentActions": [], "finalState": {}, "error": str(e)}
 
     async def event_generator():
         # Apply scenario
@@ -1067,6 +1084,10 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         agentic["finalConverged"] = iter_result.get("final_converged", False)
         agentic["iterationsUsed"] = iter_result.get("iterations_used", 0)
         agentic["toolCalls"] = fix_history
+        # New structured fields
+        agentic["initialDiagnosis"] = iter_result.get("initial_diagnosis", {})
+        agentic["agentActions"] = iter_result.get("agent_actions", [])
+        agentic["finalState"] = iter_result.get("final_state", {})
         agentic["reasoningQuality"] = _evaluate_reasoning_quality(
             fix_history,
             agentic.get("rootCauses", []),
@@ -1083,6 +1104,9 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
             "fixHistory": [],
             "finalConverged": False,
             "toolCalls": [],
+            "initialDiagnosis": {},
+            "agentActions": [],
+            "finalState": {},
         }
 
     return {

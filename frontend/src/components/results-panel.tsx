@@ -3,7 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PipelineResult, DiagnoseNLResponse } from '@/types/diagnostic';
-import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp, Wrench } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp, Wrench, Activity } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useState, useEffect, useCallback } from 'react';
 import { NetworkControlBoard } from './network-control-board';
@@ -364,50 +364,133 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
           </div>
         )}
 
-        {/* Agent reasoning: tool calls (agentic only) */}
-        {activeTab === 'agentic' && result.toolCalls && result.toolCalls.length > 0 && (
+        {/* Agent Actions (unified tool calls + fixes, agentic only) */}
+        {activeTab === 'agentic' && result.agentActions && result.agentActions.length > 0 && (
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <Wrench className="h-5 w-5 text-muted-foreground" />
-                Agent Reasoning Steps
+                <Activity className="h-5 w-5 text-muted-foreground" />
+                Agent Actions
+                <span className="text-sm font-normal text-muted-foreground ml-auto">
+                  {result.agentActions.length} action{result.agentActions.length !== 1 ? 's' : ''}
+                </span>
               </CardTitle>
               <CardDescription>
-                Tool calls and results from the diagnostic agent
+                Chronological list of diagnostic and corrective actions
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {result.toolCalls.map((tc, idx) => (
-                <div key={idx} className="rounded-lg border border-border bg-card p-3 space-y-2">
-                  <div className="flex items-center gap-2 font-medium text-sm">
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs">
-                      {idx + 1}
-                    </span>
-                    <span>Step {idx + 1}</span>
-                  </div>
-                  <div className="pl-8 text-sm">
-                    <p className="text-muted-foreground mb-1">
-                      <span className="font-medium text-foreground">Tool:</span>{' '}
-                      <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{tc.tool}</code>
-                      {Object.keys(tc.args || {}).length > 0 && (
-                        <span className="text-muted-foreground ml-1">
-                          ({JSON.stringify(tc.args)})
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-muted-foreground">
-                      <span className="font-medium text-foreground">Result:</span>{' '}
-                      <span className="font-mono text-xs break-all">
-                        {typeof tc.result === 'object'
-                          ? JSON.stringify(tc.result).length > 200
-                            ? JSON.stringify(tc.result).slice(0, 200) + '...'
-                            : JSON.stringify(tc.result)
-                          : String(tc.result)}
+            <CardContent className="space-y-3">
+              {result.agentActions.map((action, idx) => {
+                const toolName = action.tool || action.action || 'unknown';
+                const phaseBadgeColor = action.phase === 'diagnostic' ? 'bg-blue-500/10 text-blue-600' :
+                                        action.phase === 'fix' ? 'bg-green-500/10 text-green-600' :
+                                        action.phase === 'verify' ? 'bg-purple-500/10 text-purple-600' :
+                                        'bg-muted text-muted-foreground';
+                const hasReasoning = action.reasoning && action.reasoning.trim();
+                const hasRationale = action.rationale && action.rationale.trim();
+                const hasResult = action.result != null;
+
+                return (
+                  <div key={idx} className="rounded-lg border border-border bg-card p-3 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold flex-shrink-0">
+                        {idx + 1}
                       </span>
-                    </p>
+                      <code className="text-sm font-medium bg-muted px-2 py-0.5 rounded">{toolName}</code>
+                      {action.phase && (
+                        <Badge variant="outline" className={`text-xs ${phaseBadgeColor}`}>
+                          {action.phase}
+                        </Badge>
+                      )}
+                      {action.success !== undefined && (
+                        <Badge variant={action.success ? 'outline' : 'destructive'} className="text-xs">
+                          {action.success ? 'applied' : 'failed'}
+                        </Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground ml-auto">
+                        iteration {action.iteration}
+                      </span>
+                    </div>
+
+                    {/* LLM Reasoning (if present) */}
+                    {hasReasoning && (
+                      <div className="pl-8 text-sm">
+                        <p className="text-muted-foreground italic border-l-2 border-primary/30 pl-3">
+                          {action.reasoning}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Rationale for automated fixes */}
+                    {hasRationale && !hasReasoning && (
+                      <div className="pl-8 text-sm">
+                        <p className="text-muted-foreground">
+                          {action.rationale}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Collapsible result details */}
+                    {hasResult && (
+                      <details className="pl-8 group">
+                        <summary className="text-xs font-medium cursor-pointer text-muted-foreground hover:text-foreground">
+                          View result details
+                        </summary>
+                        <div className="mt-2 p-2 bg-muted/30 rounded-md overflow-auto max-h-[200px]">
+                          <JsonDisplay data={action.result} />
+                        </div>
+                      </details>
+                    )}
                   </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Final State (agentic only) */}
+        {activeTab === 'agentic' && result.finalState && (
+          <Card className={result.finalState.is_healthy ? 'border-green-500/30' : 'border-orange-500/30'}>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <CheckCircle2 className={`h-5 w-5 ${result.finalState.is_healthy ? 'text-green-500' : 'text-orange-500'}`} />
+                Final State
+                <Badge
+                  variant={result.finalState.converged ? 'default' : 'destructive'}
+                  className={`ml-auto ${result.finalState.converged ? 'bg-green-600' : ''}`}
+                >
+                  {result.finalState.converged ? 'Converged' : 'Not Converged'}
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                Network status after all corrective actions
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {result.finalState.is_healthy ? (
+                <div className="flex items-center gap-2 text-green-600">
+                  <CheckCircle2 className="h-5 w-5" />
+                  <span className="font-medium">All constraints satisfied - network is healthy</span>
                 </div>
-              ))}
+              ) : result.finalState.remaining_violations.length > 0 ? (
+                <div>
+                  <p className="text-sm font-medium mb-2 text-orange-600">Remaining Violations:</p>
+                  <ul className="space-y-1">
+                    {result.finalState.remaining_violations.map((v, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-sm">
+                        <AlertCircle className="h-4 w-4 text-orange-500 mt-0.5 flex-shrink-0" />
+                        <span className="text-muted-foreground">{v}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {result.finalState.converged
+                    ? 'Power flow converged but constraint status unknown'
+                    : 'Power flow did not converge - manual intervention required'}
+                </p>
+              )}
             </CardContent>
           </Card>
         )}
@@ -437,74 +520,9 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
           </Card>
         )}
 
-        {/* Fix History (agentic only - from iterative debugger) */}
-        {activeTab === 'agentic' && result.fixHistory && result.fixHistory.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Wrench className="h-5 w-5 text-muted-foreground" />
-                Fix History
-                {result.finalConverged !== undefined && (
-                  <Badge variant={result.finalConverged ? 'default' : 'destructive'} className="ml-auto">
-                    {result.finalConverged ? '✓ Converged' : '✗ Not converged'}
-                  </Badge>
-                )}
-              </CardTitle>
-              <CardDescription>
-                Corrective actions applied by the agent
-                {result.iterationsUsed !== undefined && ` (${result.iterationsUsed} iterations)`}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {result.fixHistory.map((fix: Record<string, unknown>, idx: number) => {
-                  const actionName = fix.action || fix.tool || 'unknown';
-                  const description = fix.rationale || fix.message ||
-                    (fix.result && typeof fix.result === 'object' ? (fix.result as Record<string, unknown>).message : null) || '';
-                  const hasResult = fix.result != null;
-                  const resultObj = typeof fix.result === 'string' ? { message: fix.result } : fix.result;
 
-                  return (
-                    <div key={idx} className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/30">
-                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold">
-                        {idx + 1}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-sm font-medium font-mono">{String(actionName)}</span>
-                          {fix.iteration !== undefined && (
-                            <span className="text-xs text-muted-foreground ml-1">(Loop {String(fix.iteration)})</span>
-                          )}
-                          {fix.success !== undefined && (
-                            <Badge variant={fix.success ? 'outline' : 'destructive'} className="text-xs">
-                              {fix.success ? 'applied' : 'failed'}
-                            </Badge>
-                          )}
-                        </div>
-                        {description && (
-                          <p className="text-sm text-muted-foreground">{String(description)}</p>
-                        )}
-                        {hasResult && (
-                          <details className="mt-2 group border border-border/50 rounded-md">
-                            <summary className="text-xs font-medium cursor-pointer text-muted-foreground hover:text-foreground bg-muted/30 px-3 py-1.5 rounded-t-md">
-                              Details
-                            </summary>
-                            <div className="p-3 bg-muted/10 border-t border-border/50 overflow-auto max-h-[250px]">
-                              <JsonDisplay data={resultObj} />
-                            </div>
-                          </details>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Full Diagnosis Results */}
-        {(!nlExtra || nlExtra.responseType === 'full_diagnosis') && (
+        {/* Full Diagnosis Results (Baseline tab only) */}
+        {activeTab === 'baseline' && (!nlExtra || nlExtra.responseType === 'full_diagnosis') && (
           <>
             <Card>
               <CardHeader>

@@ -100,6 +100,9 @@ class IterativeDebuggerAgent:
             rules_text=rules_text,
         )
 
+        # Generate initial diagnosis from preprocessor context
+        initial_diagnosis = self._generate_initial_diagnosis(context)
+
         # Run iterative loop
         fix_history = []
         conversation = [
@@ -117,11 +120,19 @@ class IterativeDebuggerAgent:
                 net, conversation, fix_history
             )
 
+        # Capture final state after all fixes
+        final_state = self._capture_final_state(net)
+
         return {
             "level": "iterative_debugger",
             "response": final_response,
+            # New structured fields
+            "initial_diagnosis": initial_diagnosis,
+            "agent_actions": fix_history,  # Unified list with reasoning + phase
+            "final_state": final_state,
+            # Backward compatible fields
             "fix_history": fix_history,
-            "final_converged": getattr(net, "converged", False),
+            "final_converged": final_state["converged"],
             "iterations_used": len(fix_history),
             "evidence": context["evidence"],
             "failure_category": context["failure_category"],
@@ -398,6 +409,7 @@ class IterativeDebuggerAgent:
                     "action": "verification",
                     "result": "All constraints satisfied",
                     "converged": True,
+                    "phase": "verify",
                 })
                 break
 
@@ -407,12 +419,14 @@ class IterativeDebuggerAgent:
                     "iteration": iteration,
                     "action": "no_fix_available",
                     "rationale": "Exhausted all automated fix strategies",
+                    "phase": "diagnostic",
                 })
                 break
 
             # Track this action so we don't repeat it
             attempted.add(fix.get("action", ""))
             fix["iteration"] = iteration
+            fix["phase"] = "fix"  # Automated fixes are always 'fix' phase
             fix_history.append(fix)
 
         # Generate report
@@ -489,11 +503,14 @@ class IterativeDebuggerAgent:
                 message = completion.choices[0].message
 
                 if message.tool_calls:
+                    # Capture LLM reasoning (the text content before tool calls)
+                    reasoning_text = message.content or ""
                     conversation.append(message.model_dump())
 
                     for tool_call in message.tool_calls:
                         fn_name = tool_call.function.name
                         fn_args = json.loads(tool_call.function.arguments)
+                        phase = self._classify_tool_phase(fn_name)
 
                         result = self._execute_tool(net, fn_name, fn_args)
                         fix_history.append({
@@ -501,6 +518,8 @@ class IterativeDebuggerAgent:
                             "tool": fn_name,
                             "args": fn_args,
                             "result": result,
+                            "reasoning": reasoning_text,
+                            "phase": phase,
                         })
 
                         conversation.append({
@@ -601,3 +620,120 @@ class IterativeDebuggerAgent:
             for action in r.get("suggested_actions", []):
                 lines.append(f"  → {action}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _classify_tool_phase(tool_name: str) -> str:
+        """Classify a tool call as diagnostic, fix, or verify."""
+        diagnostic_tools = {
+            "get_network_summary", "get_bus_data", "get_line_data", "get_gen_data",
+            "get_voltage_profile", "get_loading_profile", "get_power_balance",
+            "check_overloads", "check_voltage_violations", "find_disconnected_areas",
+            "run_n1_contingency"
+        }
+        fix_tools = {
+            "shed_load", "curtail_load", "adjust_generation", "add_shunt_compensation",
+            "add_reactive_compensation", "toggle_element", "switch_element",
+            "adjust_voltage_setpoint", "scale_all_loads"
+        }
+        verify_tools = {"run_power_flow", "run_dc_power_flow", "run_full_diagnostics"}
+
+        if tool_name in diagnostic_tools:
+            return "diagnostic"
+        elif tool_name in fix_tools:
+            return "fix"
+        elif tool_name in verify_tools:
+            return "verify"
+        return "diagnostic"
+
+    def _generate_initial_diagnosis(self, context: dict) -> dict:
+        """Extract initial diagnosis from preprocessor context before fixes."""
+        triggered_rules = context.get("triggered_rules", [])
+        evidence = context.get("evidence", {})
+
+        # Extract root causes from triggered rules (critical/high severity)
+        root_causes = []
+        for rule in triggered_rules:
+            severity = rule.get("severity", "").lower()
+            if severity in ("critical", "high"):
+                root_causes.append(f"{rule['rule_name']}: {rule['description']}")
+
+        # Extract affected components from evidence (correct nested paths)
+        affected_components = []
+
+        # Voltage violations (nested under "voltages")
+        voltages = evidence.get("voltages", {})
+        for v in voltages.get("undervoltage_buses", []):
+            bus_idx = v.get("index", v.get("bus", "?"))
+            vm_pu = v.get("vm_pu", 0)
+            affected_components.append(f"Bus {bus_idx} (undervoltage: {vm_pu:.3f} pu)")
+        for v in voltages.get("overvoltage_buses", []):
+            bus_idx = v.get("index", v.get("bus", "?"))
+            vm_pu = v.get("vm_pu", 0)
+            affected_components.append(f"Bus {bus_idx} (overvoltage: {vm_pu:.3f} pu)")
+
+        # Line overloads (nested under "line_loading")
+        line_loading = evidence.get("line_loading", {})
+        for line in line_loading.get("overloaded_lines", []):
+            line_idx = line.get("index", line.get("line_index", "?"))
+            from_bus = line.get("from_bus", "?")
+            to_bus = line.get("to_bus", "?")
+            loading = line.get("loading_pct", line.get("loading_percent", 0))
+            affected_components.append(
+                f"Line {line_idx} ({from_bus}-{to_bus}) overloaded at {loading:.1f}%"
+            )
+
+        # Transformer overloads (nested under "trafo_loading")
+        trafo_loading = evidence.get("trafo_loading", {})
+        for trafo in trafo_loading.get("overloaded_trafos", []):
+            trafo_idx = trafo.get("index", trafo.get("trafo_index", "?"))
+            loading = trafo.get("loading_pct", trafo.get("loading_percent", 0))
+            affected_components.append(
+                f"Transformer {trafo_idx} overloaded at {loading:.1f}%"
+            )
+
+        # Disconnected buses (nested under "topology")
+        topology = evidence.get("topology", {})
+        disc_buses = topology.get("disconnected_buses", [])
+        if disc_buses:
+            affected_components.append(f"Disconnected buses: {disc_buses}")
+
+        # Convergence status (nested under "convergence")
+        convergence = evidence.get("convergence", {})
+        converged_initially = convergence.get("converged", False)
+
+        return {
+            "root_causes": root_causes,
+            "affected_components": affected_components,
+            "failure_category": context.get("failure_category", "unknown"),
+            "converged_initially": converged_initially,
+        }
+
+    def _capture_final_state(self, net: pp.pandapowerNet) -> dict:
+        """Capture the final state after all fixes."""
+        state = self._observe(net)
+
+        remaining_violations = []
+
+        # Voltage violations
+        violations = state.get("violations", {})
+        for v in violations.get("undervoltage_buses", []):
+            remaining_violations.append(f"Bus {v['bus']} undervoltage: {v['vm_pu']:.3f} pu")
+        for v in violations.get("overvoltage_buses", []):
+            remaining_violations.append(f"Bus {v['bus']} overvoltage: {v['vm_pu']:.3f} pu")
+
+        # Thermal overloads
+        overloads = state.get("overloads", {})
+        for line in overloads.get("overloaded_lines", []):
+            remaining_violations.append(
+                f"Line {line['line_index']} overloaded at {line['loading_percent']:.1f}%"
+            )
+        for trafo in overloads.get("overloaded_trafos", []):
+            remaining_violations.append(
+                f"Transformer {trafo['trafo_index']} overloaded at {trafo['loading_percent']:.1f}%"
+            )
+
+        return {
+            "converged": state["converged"],
+            "remaining_violations": remaining_violations,
+            "is_healthy": self._is_healthy(state),
+        }

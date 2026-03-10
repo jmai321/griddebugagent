@@ -1,4 +1,4 @@
-import { Network, Scenario, DiagnoseResponse, DiagnoseNLResponse, OverrideState } from '@/types/diagnostic';
+import { Network, Scenario, DiagnoseResponse, DiagnoseNLResponse, OverrideState, ReDiagnoseResponse } from '@/types/diagnostic';
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -85,7 +85,7 @@ export async function runReDiagnosis(
   scenario: string,
   overrides: OverrideState,
   generatedCode?: string | null
-): Promise<DiagnoseResponse> {
+): Promise<ReDiagnoseResponse> {
   const res = await fetch(`${API_BASE}/api/rediagnose`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

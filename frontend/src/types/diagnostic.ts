@@ -91,6 +91,10 @@ export interface PipelineResult {
   agentActions?: AgentAction[];
   /** Final state after all fixes applied (agentic only). */
   finalState?: FinalState;
+  /** Network state before agent fixes (agentic only). */
+  beforeState?: RawNetworkState;
+  /** Network state after agent fixes (agentic only). */
+  afterState?: RawNetworkState;
 }
 
 // Only 2 tabs: Baseline (manual) and Agentic (auto-fix)
@@ -99,6 +103,12 @@ export type PipelineId = 'baseline' | 'agentic';
 export interface DiagnoseResponse {
   baseline: PipelineResult;
   agentic: PipelineResult;
+}
+
+export interface ReDiagnoseResponse {
+  baseline: PipelineResult;
+  agentic: PipelineResult;
+  networkState: RawNetworkState;
 }
 
 export interface GeneratedGroundTruth {

@@ -470,6 +470,38 @@ def _generate_bus_coordinates(net: pp.pandapowerNet) -> dict[int, dict[str, floa
     return coords
 
 
+def _serialize_network_state(net: pp.pandapowerNet, run_pf: bool = True) -> dict:
+    """
+    Serialize a pandapower network to a dict for frontend visualization.
+    Runs power flow if requested to populate res_bus/res_line.
+    """
+    converged = False
+    if run_pf:
+        try:
+            pp.runpp(net)
+            converged = getattr(net, "converged", False)
+        except Exception:
+            pass
+    else:
+        converged = getattr(net, "converged", False)
+
+    bus_coords = _generate_bus_coordinates(net)
+
+    return {
+        "bus": json.loads(net.bus.to_json(orient="index")),
+        "line": json.loads(net.line.to_json(orient="index")),
+        "load": json.loads(net.load.to_json(orient="index")) if getattr(net, "load", None) is not None and not net.load.empty else {},
+        "gen": json.loads(net.gen.to_json(orient="index")) if getattr(net, "gen", None) is not None and not net.gen.empty else {},
+        "trafo": json.loads(net.trafo.to_json(orient="index")) if getattr(net, "trafo", None) is not None and not net.trafo.empty else {},
+        "ext_grid": json.loads(net.ext_grid.to_json(orient="index")) if getattr(net, "ext_grid", None) is not None and not net.ext_grid.empty else {},
+        "res_bus": json.loads(net.res_bus.to_json(orient="index")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else {},
+        "res_line": json.loads(net.res_line.to_json(orient="index")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else {},
+        "bus_coords": bus_coords,
+        "affected_components": {},
+        "converged": converged,
+    }
+
+
 # ---------------------
 #  Models
 # ---------------------
@@ -770,7 +802,11 @@ def run_rediagnose(req: ReDiagnoseRequest):
     try:
         import copy
         net_iter = copy.deepcopy(net)
+        # Capture before state (broken network)
+        before_state = _serialize_network_state(net_iter, run_pf=False)
         iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        # Capture after state (fixed network)
+        after_state = _serialize_network_state(net_iter, run_pf=False)
         iter_report = iter_result["response"]
         iter_status = "success"
         if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
@@ -785,6 +821,9 @@ def run_rediagnose(req: ReDiagnoseRequest):
         agentic["initialDiagnosis"] = iter_result.get("initial_diagnosis", {})
         agentic["agentActions"] = iter_result.get("agent_actions", [])
         agentic["finalState"] = iter_result.get("final_state", {})
+        # Before/After network states for visualization
+        agentic["beforeState"] = before_state
+        agentic["afterState"] = after_state
     except Exception as e:
         print(f"[REDIAGNOSE] Agentic error: {e}")
         agentic = {
@@ -799,9 +838,14 @@ def run_rediagnose(req: ReDiagnoseRequest):
             "initialDiagnosis": {},
             "agentActions": [],
             "finalState": {},
+            "beforeState": {},
+            "afterState": {},
         }
 
-    return {"baseline": baseline, "agentic": agentic}
+    # Serialize network state with overrides applied for frontend visualization
+    network_state = _serialize_network_state(net, run_pf=False)
+
+    return {"baseline": baseline, "agentic": agentic, "networkState": network_state}
 
 
 # ---------------------
@@ -840,7 +884,11 @@ def run_diagnose(req: DiagnoseRequest):
     try:
         import copy
         net_iter = copy.deepcopy(net)
+        # Capture before state (broken network)
+        before_state = _serialize_network_state(net_iter, run_pf=False)
         iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        # Capture after state (fixed network)
+        after_state = _serialize_network_state(net_iter, run_pf=False)
         iter_report = iter_result["response"]
         iter_status = "success"
         if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
@@ -855,6 +903,9 @@ def run_diagnose(req: DiagnoseRequest):
         agentic["initialDiagnosis"] = iter_result.get("initial_diagnosis", {})
         agentic["agentActions"] = iter_result.get("agent_actions", [])
         agentic["finalState"] = iter_result.get("final_state", {})
+        # Before/After network states for visualization
+        agentic["beforeState"] = before_state
+        agentic["afterState"] = after_state
         # Compute reasoning quality
         agentic["reasoningQuality"] = _evaluate_reasoning_quality(
             fix_history,
@@ -872,6 +923,8 @@ def run_diagnose(req: DiagnoseRequest):
             "initialDiagnosis": {},
             "agentActions": [],
             "finalState": {},
+            "beforeState": {},
+            "afterState": {},
             "reasoningQuality": {"checks": [], "summary": f"Agent failed: {e}", "passedCount": 0, "totalCount": 0},
         }
 
@@ -916,7 +969,11 @@ async def run_diagnose_stream(req: DiagnoseRequest):
         try:
             s, _ = _find_and_apply_scenario(scenario_id, network_name)
             s.run_pf()
+            # Capture before state (broken network)
+            before_state = _serialize_network_state(s.net, run_pf=False)
             r = _iterative_agent.diagnose(s.net, network_name=network_name)
+            # Capture after state (fixed network)
+            after_state = _serialize_network_state(s.net, run_pf=False)
             report = r["response"]
             status = "success"
             if report.startswith("Agent loop error") or report.startswith("LLM call failed"):
@@ -931,6 +988,9 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             out["initialDiagnosis"] = r.get("initial_diagnosis", {})
             out["agentActions"] = r.get("agent_actions", [])
             out["finalState"] = r.get("final_state", {})
+            # Before/After network states for visualization
+            out["beforeState"] = before_state
+            out["afterState"] = after_state
             # Compute reasoning quality
             out["reasoningQuality"] = _evaluate_reasoning_quality(
                 fix_history,
@@ -945,7 +1005,7 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
                     "correctiveActions": [], "fixHistory": [], "finalConverged": False,
                     "iterationsUsed": 0, "toolCalls": [], "initialDiagnosis": {},
-                    "agentActions": [], "finalState": {}, "error": str(e)}
+                    "agentActions": [], "finalState": {}, "beforeState": {}, "afterState": {}, "error": str(e)}
 
     async def event_generator():
         # Apply scenario
@@ -1073,7 +1133,11 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
     try:
         import copy
         net_iter = copy.deepcopy(net)
+        # Capture before state (broken network)
+        before_state = _serialize_network_state(net_iter, run_pf=False)
         iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        # Capture after state (fixed network)
+        after_state = _serialize_network_state(net_iter, run_pf=False)
         iter_report = iter_result["response"]
         iter_status = "success"
         if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
@@ -1088,6 +1152,9 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         agentic["initialDiagnosis"] = iter_result.get("initial_diagnosis", {})
         agentic["agentActions"] = iter_result.get("agent_actions", [])
         agentic["finalState"] = iter_result.get("final_state", {})
+        # Before/After network states for visualization
+        agentic["beforeState"] = before_state
+        agentic["afterState"] = after_state
         agentic["reasoningQuality"] = _evaluate_reasoning_quality(
             fix_history,
             agentic.get("rootCauses", []),
@@ -1107,6 +1174,8 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
             "initialDiagnosis": {},
             "agentActions": [],
             "finalState": {},
+            "beforeState": {},
+            "afterState": {},
         }
 
     return {

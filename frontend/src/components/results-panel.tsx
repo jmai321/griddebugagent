@@ -80,6 +80,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
   const [isSimulating, setIsSimulating] = useState(false);
   const [isReDiagnosing, setIsReDiagnosing] = useState(false);
   const [lastSimulationConverged, setLastSimulationConverged] = useState<boolean | null>(null);
+  const [lastAppliedOverrides, setLastAppliedOverrides] = useState<OverrideState | null>(null);
 
   // Compute active result based on selected tab
   const result = activeTab === 'baseline' ? baselineResult : agenticResult;
@@ -117,12 +118,14 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
 
   useEffect(() => {
     if (!isLoading && (result || nlExtra) && networkName) {
-      fetchNetworkState();
+      // Use last applied overrides if available to maintain correct state
+      fetchNetworkState(lastAppliedOverrides || undefined);
     }
-  }, [isLoading, result, nlExtra, networkName, fetchNetworkState]);
+  }, [isLoading, result, nlExtra, networkName, fetchNetworkState, lastAppliedOverrides]);
 
   const handleApplyOverrides = async (overrides: OverrideState) => {
     setIsSimulating(true);
+    setLastAppliedOverrides(overrides);
     try {
       await fetchNetworkState(overrides);
     } finally {
@@ -134,6 +137,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
     if (!networkName || !onDiagnosisUpdate) return;
 
     setIsReDiagnosing(true);
+    setLastAppliedOverrides(overrides);
     try {
       const response = await runReDiagnosis(
         networkName,
@@ -142,6 +146,9 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
         nlExtra?.generatedCode || null
       );
       onDiagnosisUpdate(response);
+      // Use network state directly from rediagnose response (includes overrides)
+      setNetworkState(response.networkState);
+      setLastSimulationConverged(response.networkState.converged);
     } catch (err) {
       console.error("Re-diagnosis failed:", err);
     } finally {
@@ -326,6 +333,54 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
                   {nlExtra.generatedCode}
                 </pre>
               )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Before/After Network Visualization - Agentic tab only */}
+        {activeTab === 'agentic' && result.beforeState && result.afterState && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Activity className="h-5 w-5 text-primary" />
+                Network State Comparison
+              </CardTitle>
+              <CardDescription>
+                Side-by-side view of the network before and after agent fixes
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={result.beforeState.converged ? 'default' : 'destructive'}>
+                      {result.beforeState.converged ? 'Converged' : 'Not Converged'}
+                    </Badge>
+                    <span className="text-sm font-medium">Before Fixes</span>
+                  </div>
+                  <div className="h-[350px] border rounded-lg overflow-hidden">
+                    <NetworkGraph
+                      networkState={result.beforeState}
+                      isLoading={false}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={result.afterState.converged ? 'default' : 'destructive'}
+                           className={result.afterState.converged ? 'bg-green-600' : ''}>
+                      {result.afterState.converged ? 'Converged' : 'Not Converged'}
+                    </Badge>
+                    <span className="text-sm font-medium">After Fixes</span>
+                  </div>
+                  <div className="h-[350px] border rounded-lg overflow-hidden">
+                    <NetworkGraph
+                      networkState={result.afterState}
+                      isLoading={false}
+                    />
+                  </div>
+                </div>
+              </div>
             </CardContent>
           </Card>
         )}

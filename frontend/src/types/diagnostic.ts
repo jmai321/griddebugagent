@@ -11,13 +11,16 @@ export interface Scenario {
   category: 'normal' | 'nonconvergence' | 'voltage' | 'thermal' | 'contingency';
 }
 
+// Can be array of indices or ["all"] marker
+type ComponentIndices = number[] | ['all'];
+
 export interface ParsedAffectedComponents {
-  bus?: number[];
-  line?: number[];
-  load?: number[];
-  gen?: number[];
-  trafo?: number[];
-  ext_grid?: number[];
+  bus?: ComponentIndices;
+  line?: ComponentIndices;
+  load?: ComponentIndices;
+  gen?: ComponentIndices;
+  trafo?: ComponentIndices;
+  ext_grid?: ComponentIndices;
 }
 
 /** Phase classification for agent actions. */

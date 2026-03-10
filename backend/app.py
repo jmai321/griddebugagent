@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
 import pandas as pd
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 
 import pandapower as pp
 from scenarios.code_sandbox import execute_safely
@@ -139,6 +139,39 @@ def _find_and_apply_scenario(scenario_id: str, network: str):
     raise HTTPException(404, f"Scenario '{scenario_id}' not found in factory")
 
 
+def _extract_section_raw(report: str, section_name: str) -> str:
+    """Extract raw text of a section from LLM report (for JSON parsing)."""
+    lines = report.split("\n")
+    section_lower = section_name.lower().replace(" ", "").replace("_", "")
+    known_headers = ["rootcauses", "affectedcomponents", "correctiveactions", "confidenceassessment"]
+
+    in_section = False
+    captured_lines = []
+
+    for line in lines:
+        line_stripped = line.strip()
+        line_lower = line_stripped.lower().replace(" ", "").replace("_", "")
+
+        # Check if this line is ANY header
+        is_any_header = False
+        for h in known_headers:
+            cleaned_line = re.sub(r'^[\s#*\-\d.]+', '', line_lower).strip()
+            if cleaned_line.startswith(h):
+                is_any_header = True
+                break
+
+        if is_any_header:
+            cleaned_line = re.sub(r'^[\s#*\-\d.]+', '', line_lower).strip()
+            if cleaned_line.startswith(section_lower):
+                in_section = True
+            else:
+                in_section = False
+        elif in_section:
+            captured_lines.append(line)
+
+    return "\n".join(captured_lines)
+
+
 def _parse_llm_report(report: str) -> dict:
     """
     Parse LLM markdown report into rootCauses, affectedComponents, correctiveActions.
@@ -224,6 +257,27 @@ def _parse_llm_report(report: str) -> dict:
     result["affectedComponents"] = extract_section_items(report, "Affected Components")
     result["correctiveActions"] = extract_section_items(report, "Corrective Actions")
 
+    # Filter out JSON blocks and fragments from affectedComponents (JSON is parsed separately)
+    def _is_json_fragment(s: str) -> bool:
+        s = s.strip()
+        if not s:
+            return True
+        # JSON object start/end
+        if s.startswith("{") or s.startswith("}") or s == "}":
+            return True
+        # Code fence
+        if s.startswith("```"):
+            return True
+        # JSON key-value pairs like "bus": [], "line": [9, 28],
+        if re.match(r'^"?(bus|line|load|gen|trafo|ext_grid)"?\s*:', s):
+            return True
+        return False
+
+    result["affectedComponents"] = [
+        item for item in result["affectedComponents"]
+        if not _is_json_fragment(item)
+    ]
+
     return result
 
 
@@ -256,13 +310,57 @@ def _parse_affected_component(text: str) -> dict | None:
     return None
 
 
-def _parse_affected_components_list(components: list[str]) -> dict[str, list[int]]:
+def _extract_json_from_text(text: str) -> dict | None:
+    """
+    Extract JSON object from text, looking for ```json blocks or raw JSON.
+    Returns parsed dict or None if not found/invalid.
+    """
+    # Try to find ```json ... ``` block
+    json_block_match = re.search(r'```json\s*(\{[^`]+\})\s*```', text, re.DOTALL)
+    if json_block_match:
+        try:
+            return json.loads(json_block_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Try to find raw JSON object
+    json_match = re.search(r'\{[^{}]*"(?:bus|line|load|gen|trafo|ext_grid)"[^{}]*\}', text)
+    if json_match:
+        try:
+            return json.loads(json_match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
+def _parse_affected_components_list(components: list[str], full_text: str = "") -> dict[str, list[int]]:
     """
     Parse list of LLM component strings into structured format.
+    First tries to extract JSON from the text, then falls back to regex parsing.
     Returns: {"bus": [3, 5], "line": [1, 2], ...}
     """
     result: dict[str, list[int]] = {}
 
+    # First, try to extract JSON from the full affected components text
+    combined_text = full_text or " ".join(components)
+    json_data = _extract_json_from_text(combined_text)
+
+    if json_data:
+        # Parse JSON format
+        valid_types = {"bus", "line", "load", "gen", "trafo", "ext_grid"}
+        for comp_type, value in json_data.items():
+            if comp_type not in valid_types:
+                continue
+            if value == "all":
+                result[comp_type] = ["all"]
+            elif isinstance(value, list):
+                indices = [int(i) for i in value if isinstance(i, (int, float)) or (isinstance(i, str) and i.isdigit())]
+                if indices:
+                    result[comp_type] = indices
+        return result
+
+    # Fall back to regex parsing
     for comp_text in components:
         parsed = _parse_affected_component(comp_text)
         if parsed:
@@ -276,10 +374,45 @@ def _parse_affected_components_list(components: list[str]) -> dict[str, list[int
     return result
 
 
-def _build_pipeline_result(report: str, analysis_status: str = "success") -> dict:
-    """Build pipeline result with analysisStatus and parsed fields."""
+def _build_pipeline_result(
+    report: str,
+    analysis_status: str = "success",
+    structured_output: dict | None = None
+) -> dict:
+    """
+    Build pipeline result with analysisStatus and parsed fields.
+
+    If structured_output is provided (from function calling), use it directly.
+    Otherwise, fall back to parsing the report text.
+    """
+    if structured_output:
+        # Use structured output directly (from function calling)
+        affected = structured_output.get("affected_components", {})
+        # Build prose descriptions for display
+        affected_prose = []
+        component_names = {"bus": "Buses", "line": "Lines", "load": "Loads",
+                          "gen": "Generators", "trafo": "Transformers", "ext_grid": "External Grids"}
+        for comp_type, display_name in component_names.items():
+            indices = affected.get(comp_type, [])
+            if indices:
+                affected_prose.append(f"{display_name}: {', '.join(map(str, indices))}")
+
+        return {
+            "analysisStatus": analysis_status,
+            "rootCauses": structured_output.get("root_causes", []),
+            "affectedComponents": affected_prose,
+            "correctiveActions": structured_output.get("corrective_actions", []),
+            "parsedAffectedComponents": affected,
+            "rawResult": report,
+        }
+
+    # Fall back to parsing report text
     parsed = _parse_llm_report(report)
-    parsed_components = _parse_affected_components_list(parsed["affectedComponents"])
+    affected_section_raw = _extract_section_raw(report, "Affected Components")
+    parsed_components = _parse_affected_components_list(
+        parsed["affectedComponents"],
+        full_text=affected_section_raw
+    )
     return {
         "analysisStatus": analysis_status,
         "rootCauses": parsed["rootCauses"],
@@ -470,10 +603,15 @@ def _generate_bus_coordinates(net: pp.pandapowerNet) -> dict[int, dict[str, floa
     return coords
 
 
-def _serialize_network_state(net: pp.pandapowerNet, run_pf: bool = True) -> dict:
+def _serialize_network_state(
+    net: pp.pandapowerNet,
+    run_pf: bool = True,
+    affected_components: dict | None = None
+) -> dict:
     """
     Serialize a pandapower network to a dict for frontend visualization.
     Runs power flow if requested to populate res_bus/res_line.
+    Expands "all" markers in affected_components to actual indices.
     """
     converged = False
     if run_pf:
@@ -487,6 +625,27 @@ def _serialize_network_state(net: pp.pandapowerNet, run_pf: bool = True) -> dict
 
     bus_coords = _generate_bus_coordinates(net)
 
+    # Expand "all" markers in affected_components to actual indices
+    expanded_affected = {}
+    if affected_components:
+        component_tables = {
+            "bus": net.bus,
+            "line": net.line,
+            "load": net.load if hasattr(net, "load") else None,
+            "gen": net.gen if hasattr(net, "gen") else None,
+            "trafo": net.trafo if hasattr(net, "trafo") else None,
+            "ext_grid": net.ext_grid if hasattr(net, "ext_grid") else None,
+        }
+        for comp_type, indices in affected_components.items():
+            if indices == ["all"] or indices == "all":
+                table = component_tables.get(comp_type)
+                if table is not None and not table.empty:
+                    expanded_affected[comp_type] = list(table.index.astype(int))
+                else:
+                    expanded_affected[comp_type] = []
+            else:
+                expanded_affected[comp_type] = indices
+
     return {
         "bus": json.loads(net.bus.to_json(orient="index")),
         "line": json.loads(net.line.to_json(orient="index")),
@@ -497,7 +656,7 @@ def _serialize_network_state(net: pp.pandapowerNet, run_pf: bool = True) -> dict
         "res_bus": json.loads(net.res_bus.to_json(orient="index")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else {},
         "res_line": json.loads(net.res_line.to_json(orient="index")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else {},
         "bus_coords": bus_coords,
-        "affected_components": {},
+        "affected_components": expanded_affected,
         "converged": converged,
     }
 
@@ -612,7 +771,7 @@ class SimulateOverridesRequest(BaseModel):
     scenario: str
     generatedCode: Optional[str] = None
     overrides: OverrideState
-    llmAffectedComponents: Optional[Dict[str, List[int]]] = None
+    llmAffectedComponents: Optional[Dict[str, Any]] = None  # Can be List[int] or ["all"]
 
 
 class NetworkStateRequest(BaseModel):
@@ -620,7 +779,7 @@ class NetworkStateRequest(BaseModel):
     network: str = "case14"
     scenario: str
     generatedCode: Optional[str] = None
-    llmAffectedComponents: Optional[Dict[str, List[int]]] = None
+    llmAffectedComponents: Optional[Dict[str, Any]] = None  # Can be List[int] or ["all"]
 
 
 class ReDiagnoseRequest(BaseModel):
@@ -675,34 +834,9 @@ def get_network_state(req: NetworkStateRequest):
     if req.generatedCode:
         execute_safely(req.generatedCode, net, timeout=5)
 
-    # Try running power flow to get res_bus and res_line if possible
-    converged = False
-    try:
-        pp.runpp(net)
-        converged = getattr(net, "converged", False)
-    except Exception:
-        pass
-
-    # Generate bus coordinates for visualization
-    bus_coords = _generate_bus_coordinates(net)
-
-    # Use LLM-identified affected components (if provided), not math-based
+    # Use _serialize_network_state which handles "all" expansion
     affected_components = req.llmAffectedComponents or {}
-
-    # Convert DataFrames to dicts (index-keyed for frontend compatibility)
-    return {
-        "bus": json.loads(net.bus.to_json(orient="index")),
-        "line": json.loads(net.line.to_json(orient="index")),
-        "load": json.loads(net.load.to_json(orient="index")) if getattr(net, "load", None) is not None and not net.load.empty else {},
-        "gen": json.loads(net.gen.to_json(orient="index")) if getattr(net, "gen", None) is not None and not net.gen.empty else {},
-        "trafo": json.loads(net.trafo.to_json(orient="index")) if getattr(net, "trafo", None) is not None and not net.trafo.empty else {},
-        "ext_grid": json.loads(net.ext_grid.to_json(orient="index")) if getattr(net, "ext_grid", None) is not None and not net.ext_grid.empty else {},
-        "res_bus": json.loads(net.res_bus.to_json(orient="index")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else {},
-        "res_line": json.loads(net.res_line.to_json(orient="index")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else {},
-        "bus_coords": bus_coords,
-        "affected_components": affected_components,
-        "converged": converged,
-    }
+    return _serialize_network_state(net, run_pf=True, affected_components=affected_components)
 
 # ---------------------
 #  POST /api/simulate_overrides
@@ -727,34 +861,9 @@ def run_simulate_overrides(req: SimulateOverridesRequest):
     # Apply manual overrides using helper
     _apply_overrides(net, req.overrides)
 
-    # Run power flow
-    converged = False
-    try:
-        pp.runpp(net)
-        converged = getattr(net, "converged", False)
-    except Exception:
-        pass
-
-    # Generate bus coordinates for visualization
-    bus_coords = _generate_bus_coordinates(net)
-
-    # Use LLM-identified affected components (if provided)
+    # Use _serialize_network_state which handles "all" expansion
     affected_components = req.llmAffectedComponents or {}
-
-    # Return full network state (same structure as /api/network_state)
-    return {
-        "bus": json.loads(net.bus.to_json(orient="index")),
-        "line": json.loads(net.line.to_json(orient="index")),
-        "load": json.loads(net.load.to_json(orient="index")) if getattr(net, "load", None) is not None and not net.load.empty else {},
-        "gen": json.loads(net.gen.to_json(orient="index")) if getattr(net, "gen", None) is not None and not net.gen.empty else {},
-        "trafo": json.loads(net.trafo.to_json(orient="index")) if getattr(net, "trafo", None) is not None and not net.trafo.empty else {},
-        "ext_grid": json.loads(net.ext_grid.to_json(orient="index")) if getattr(net, "ext_grid", None) is not None and not net.ext_grid.empty else {},
-        "res_bus": json.loads(net.res_bus.to_json(orient="index")) if getattr(net, "res_bus", None) is not None and not net.res_bus.empty else {},
-        "res_line": json.loads(net.res_line.to_json(orient="index")) if getattr(net, "res_line", None) is not None and not net.res_line.empty else {},
-        "bus_coords": bus_coords,
-        "affected_components": affected_components,
-        "converged": converged,
-    }
+    return _serialize_network_state(net, run_pf=True, affected_components=affected_components)
 
 
 # ---------------------
@@ -795,8 +904,9 @@ def run_rediagnose(req: ReDiagnoseRequest):
     # Run both diagnosis pipelines
     baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
     baseline_report = baseline_result["response"]
+    baseline_structured = baseline_result.get("structured_output")
     baseline_status = "success" if not baseline_report.startswith("LLM call failed") else "error"
-    baseline = _build_pipeline_result(baseline_report, baseline_status)
+    baseline = _build_pipeline_result(baseline_report, baseline_status, baseline_structured)
 
     # Use iterative debugger for agentic tab
     try:
@@ -843,7 +953,9 @@ def run_rediagnose(req: ReDiagnoseRequest):
         }
 
     # Serialize network state with overrides applied for frontend visualization
-    network_state = _serialize_network_state(net, run_pf=False)
+    # Use parsed affected components from baseline result for highlighting
+    affected_components = baseline.get("parsedAffectedComponents", {})
+    network_state = _serialize_network_state(net, run_pf=False, affected_components=affected_components)
 
     return {"baseline": baseline, "agentic": agentic, "networkState": network_state}
 
@@ -875,10 +987,11 @@ def run_diagnose(req: DiagnoseRequest):
     # --- Baseline pipeline ---
     baseline_result = _baseline_agent.diagnose(net, network_name=req.network, user_query=user_query)
     baseline_report = baseline_result["response"]
+    baseline_structured = baseline_result.get("structured_output")
     baseline_status = "success"
     if baseline_report.startswith("LLM call failed"):
         baseline_status = "error"
-    baseline = _build_pipeline_result(baseline_report, baseline_status)
+    baseline = _build_pipeline_result(baseline_report, baseline_status, baseline_structured)
 
     # --- Agentic pipeline (using iterative debugger) ---
     try:
@@ -958,8 +1071,9 @@ async def run_diagnose_stream(req: DiagnoseRequest):
         try:
             r = _baseline_agent.diagnose(net, network_name=network_name, user_query=user_query)
             report = r["response"]
+            structured = r.get("structured_output")
             status = "error" if report.startswith("LLM call failed") else "success"
-            return _build_pipeline_result(report, status)
+            return _build_pipeline_result(report, status, structured)
         except Exception as e:
             return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
                     "correctiveActions": [], "rawResult": str(e)}
@@ -1124,10 +1238,11 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
     # Passing it causes the LLM to use direct-answer format instead of diagnostic format.
     baseline_result = _baseline_agent.diagnose(net, network_name=req.network, user_query="")
     baseline_report = baseline_result["response"]
+    baseline_structured = baseline_result.get("structured_output")
     baseline_status = "success"
     if baseline_report.startswith("LLM call failed"):
         baseline_status = "error"
-    baseline = _build_pipeline_result(baseline_report, baseline_status)
+    baseline = _build_pipeline_result(baseline_report, baseline_status, baseline_structured)
 
     # --- Agentic pipeline (iterative debugger) ---
     try:

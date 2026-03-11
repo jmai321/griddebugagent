@@ -699,7 +699,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
                 <CheckCircle2 className="h-5 w-5 text-green-600" />
                 Analytical Summary
               </CardTitle>
-              <CardDescription>Agent response to your query</CardDescription>
+              <CardDescription>Summary of findings, actions, and results</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="text-sm prose prose-sm dark:prose-invert max-w-none">

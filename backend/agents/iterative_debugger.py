@@ -41,6 +41,9 @@ Your workflow:
 5. CHECK CONSTRAINTS: If it converges, YOU MUST run `check_overloads` and `check_voltage_violations`. A converged network with violations is NOT fixed!
 6. ITERATE: If not fixed, try the next most likely correction
 
+IMPORTANT: Before EVERY tool call, you MUST write a brief explanation of what \
+you are about to do and why. Never call tools silently.
+
 After each fix attempt, report:
 - What you tried and why
 - Whether it improved the situation (including remaining violations)

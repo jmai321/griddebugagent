@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from typing import Any
 
 import pandapower as pp
@@ -103,9 +104,20 @@ class IterativeDebuggerAgent:
         if user_query:
             user_query_section = f"== USER QUERY ==\n{user_query}\n\n"
             task_instruction = (
-                "Please answer the user query above using the available query tools. "
+                "Please answer the user query above using the available tools. "
                 "Call the appropriate tools to retrieve the requested information, "
-                "then provide a clear, concise answer."
+                "then provide a clear, concise answer.\n\n"
+                "CRITICAL: Do NOT apply corrective fixes (load shedding, shunt compensation, "
+                "voltage setpoint changes, etc.) unless the user explicitly asks you to fix or "
+                "correct something. If the user asks to 'summarize violations' or 'evaluate impact', "
+                "just REPORT the findings. You may use modification tools ONLY if the query requires "
+                "setting up a scenario (e.g. 'take line X out of service', 'double all loads').\n\n"
+                "IMPORTANT RULES:\n"
+                "- Be concise. Use short bullet points, not paragraphs. No filler or pleasantries.\n"
+                "- For 'total active power loss', compute the sum of pl_mw across ALL lines "
+                "(or use total_gen_p_mw - total_load_p_mw from get_power_balance). Do NOT report a single line's loss.\n"
+                "- Report exact numeric values with units. Do not round excessively.\n"
+                "- Do not add conversational text like 'feel free to ask' or 'if you need further analysis'."
             )
         else:
             user_query_section = ""
@@ -139,9 +151,15 @@ class IterativeDebuggerAgent:
         # Capture final state after all fixes
         final_state = self._capture_final_state(net)
 
+        # Generate concise query summary if user asked a question
+        query_summary = None
+        if user_query:
+            query_summary = self._generate_query_summary(user_query, fix_history, final_response)
+
         return {
             "level": "iterative_debugger",
             "response": final_response,
+            "query_summary": query_summary,
             # New structured fields
             "initial_diagnosis": initial_diagnosis,
             "agent_actions": fix_history,  # Unified list with reasoning + phase
@@ -274,6 +292,9 @@ class IterativeDebuggerAgent:
                     return message.content or ""
 
             except Exception as e:
+                if "429" in str(e):
+                    time.sleep(5)
+                    continue
                 return f"Iterative debugger error at step {i}: {str(e)}"
 
         return "Max iterations reached in iterative debugger."
@@ -289,9 +310,15 @@ class IterativeDebuggerAgent:
             "get_voltage_profile": lambda: QueryTools.get_voltage_profile(net),
             "get_loading_profile": lambda: QueryTools.get_loading_profile(net),
             "get_power_balance": lambda: QueryTools.get_power_balance(net),
+            "get_line_results": lambda: QueryTools.get_line_results(net, **args),
+            "get_bus_results": lambda: QueryTools.get_bus_results(net, **args),
             "run_power_flow": lambda: SimulationTools.run_power_flow(net),
             "run_dc_power_flow": lambda: SimulationTools.run_dc_power_flow(net),
             "run_n1_contingency": lambda: SimulationTools.run_n1_contingency(net, **args),
+            "run_short_circuit": lambda: SimulationTools.run_short_circuit(net, **args),
+            "run_opf": lambda: SimulationTools.run_opf(net, **args),
+            "save_network_snapshot": lambda: SimulationTools.save_network_snapshot(net, **args),
+            "restore_network_snapshot": lambda: SimulationTools.restore_network_snapshot(net, **args),
             "run_full_diagnostics": lambda: DiagnosticTools.run_full_diagnostics(net),
             "check_overloads": lambda: DiagnosticTools.check_overloads(net, **args),
             "check_voltage_violations": lambda: DiagnosticTools.check_voltage_violations(net, **args),
@@ -370,13 +397,15 @@ class IterativeDebuggerAgent:
         diagnostic_tools = {
             "get_network_summary", "get_bus_data", "get_line_data", "get_gen_data",
             "get_voltage_profile", "get_loading_profile", "get_power_balance",
+            "get_line_results", "get_bus_results",
             "check_overloads", "check_voltage_violations", "find_disconnected_areas",
-            "run_n1_contingency"
+            "run_n1_contingency", "run_short_circuit", "run_opf",
         }
         fix_tools = {
             "shed_load", "curtail_load", "adjust_generation", "add_shunt_compensation",
             "add_reactive_compensation", "toggle_element", "switch_element",
-            "adjust_voltage_setpoint", "scale_all_loads"
+            "adjust_voltage_setpoint", "scale_all_loads",
+            "save_network_snapshot", "restore_network_snapshot",
         }
         verify_tools = {"run_power_flow", "run_dc_power_flow", "run_full_diagnostics"}
 
@@ -480,3 +509,40 @@ class IterativeDebuggerAgent:
             "remaining_violations": remaining_violations,
             "is_healthy": self._is_healthy(state),
         }
+
+    def _generate_query_summary(self, user_query: str, fix_history: list[dict], full_response: str) -> str | None:
+        """Generate a concise summary answering just the user's query, separate from fix details."""
+        # Collect tool results (diagnostic tools only) for context
+        diagnostic_results = []
+        for action in fix_history:
+            if action.get("phase") == "diagnostic":
+                diagnostic_results.append({
+                    "tool": action["tool"],
+                    "result": action["result"],
+                })
+
+        try:
+            completion = self.llm_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": (
+                        "You are a power systems engineer. Given a user query, tool results, and the agent's "
+                        "full response, produce a summary that answers the original query. "
+                        "You MUST include every piece of information the user explicitly asked for. "
+                        "Do NOT omit any requested quantity. Do NOT mention any corrective actions or fixes attempted. "
+                        "Use short bullet points with exact numeric values and units. "
+                        "No filler, no pleasantries."
+                    )},
+                    {"role": "user", "content": (
+                        f"USER QUERY: {user_query}\n\n"
+                        f"DIAGNOSTIC TOOL RESULTS:\n{json.dumps(diagnostic_results, indent=2)[:3000]}\n\n"
+                        f"AGENT FULL RESPONSE:\n{full_response[:2000]}\n\n"
+                        "Answer the user's query. Include ALL requested information — do not drop any."
+                    )},
+                ],
+                temperature=0.2,
+                max_tokens=500,
+            )
+            return completion.choices[0].message.content or None
+        except Exception:
+            return None

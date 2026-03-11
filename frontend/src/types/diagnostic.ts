@@ -98,6 +98,8 @@ export interface PipelineResult {
   beforeState?: RawNetworkState;
   /** Network state after agent fixes (agentic only). */
   afterState?: RawNetworkState;
+  /** Concise answer to the user's query, separate from fix narrative (agentic only). */
+  querySummary?: string;
 }
 
 // Only 2 tabs: Baseline (manual) and Agentic (auto-fix)

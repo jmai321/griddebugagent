@@ -18,9 +18,9 @@ interface InputPanelProps {
 const EXAMPLE_PROMPTS = [
   'Scale all loads by 15x to cause non-convergence',
   'Take line 5 out of service and double loads at bus 10',
-  'Disable all generators except the ext_grid',
-  'Add 80 Mvar inductive load at bus 12 to cause voltage sag',
-  'Reduce thermal limits of all lines to 25% of original',
+  'Run AC power flow and show the total active power loss',
+  'What are the connected buses for line 11?',
+  'Perform N-1 contingency on line 171 and summarize violations',
 ];
 
 export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProps) {
@@ -94,7 +94,7 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProp
               : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
               }`}
           >
-            Describe Failure
+            Query / Scenario
           </button>
           <button
             onClick={() => setMode('preset')}
@@ -187,15 +187,15 @@ export function InputPanel({ onAnalyze, onAnalyzeNL, isLoading }: InputPanelProp
         {mode === 'nl' && (
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Describe the Failure</CardTitle>
+              <CardTitle className="text-lg">Query</CardTitle>
               <CardDescription>
-                Tell the agent what failure to simulate in natural language
+                Ask a question about the network or describe a failure to simulate
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <textarea
                 className="w-full min-h-[120px] p-3 rounded-md border border-input bg-background text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
-                placeholder="e.g. Take line 3 out of service and increase all loads by 5x to cause cascading overloads..."
+                placeholder="e.g. Run AC power flow and show total losses, or: Take line 3 out of service..."
                 value={nlDescription}
                 onChange={(e) => setNlDescription(e.target.value)}
               />

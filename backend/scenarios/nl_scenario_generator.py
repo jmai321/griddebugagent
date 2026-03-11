@@ -158,7 +158,7 @@ pandapower DataFrames: `net.bus`, `net.line`, `net.load`, `net.gen`, \
 - Use standard pandapower API calls (e.g., `pp.create_load()`, direct DataFrame mutation).
 - Do NOT import any modules — `pp`, `pd`, `np` are already available.
 - Do NOT call `pp.runpp()` — the caller handles power flow execution.
-- For short circuit analysis, you MUST call `prepare_for_sc(net)` first. Then use `import pandapower.shortcircuit as sc` and call `sc.calc_sc(net, bus=X, fault="3ph")`. Do NOT use "fault_bus".
+- For short circuit analysis queries, classify as `direct_answer` so the agent can use its `run_short_circuit` tool. Do NOT generate short-circuit code directly.
 - Keep code concise and focused on the mutation.
 
 ## Output Format

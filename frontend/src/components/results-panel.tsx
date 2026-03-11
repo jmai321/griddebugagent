@@ -5,6 +5,9 @@ import { Badge } from '@/components/ui/badge';
 import { PipelineResult, DiagnoseNLResponse } from '@/types/diagnostic';
 import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp, Wrench, Activity } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { useState, useEffect, useCallback } from 'react';
 import { NetworkControlBoard } from './network-control-board';
 import { NetworkGraph } from './network-graph';
@@ -54,6 +57,14 @@ function JsonDisplay({ data }: { data: unknown }) {
   );
 }
 
+function Markdown({ children }: { children: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+      {children}
+    </ReactMarkdown>
+  );
+}
+
 type TabId = 'baseline' | 'agentic';
 
 const TAB_LABELS: Record<TabId, string> = {
@@ -74,6 +85,7 @@ interface ResultsPanelProps {
 }
 
 export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading, loadingStage, error, networkName, scenarioName, onDiagnosisUpdate }: ResultsPanelProps) {
+  const isDirectAnswer = nlExtra?.responseType === 'direct_answer';
   const [activeTab, setActiveTab] = useState<TabId>('baseline');
   const [codeExpanded, setCodeExpanded] = useState(false);
   const [networkState, setNetworkState] = useState<RawNetworkState | null>(null);
@@ -81,6 +93,11 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
   const [isReDiagnosing, setIsReDiagnosing] = useState(false);
   const [lastSimulationConverged, setLastSimulationConverged] = useState<boolean | null>(null);
   const [lastAppliedOverrides, setLastAppliedOverrides] = useState<OverrideState | null>(null);
+
+  // Auto-switch to agentic tab for direct answer queries
+  useEffect(() => {
+    if (isDirectAnswer) setActiveTab('agentic');
+  }, [isDirectAnswer]);
 
   // Compute active result based on selected tab
   const result = activeTab === 'baseline' ? baselineResult : agenticResult;
@@ -268,7 +285,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
             </CardHeader>
             <CardContent>
               <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
-                <ReactMarkdown>{nlExtra.textAnswer}</ReactMarkdown>
+                <Markdown>{nlExtra.textAnswer}</Markdown>
               </div>
             </CardContent>
           </Card>
@@ -466,7 +483,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
                         {/* Reasoning shown once per iteration */}
                         {reasoning && (
                           <div className="text-sm border-l-2 border-primary/30 pl-3 prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-li:my-0 text-muted-foreground">
-                            <ReactMarkdown>{reasoning}</ReactMarkdown>
+                            <Markdown>{reasoning}</Markdown>
                           </div>
                         )}
 
@@ -608,7 +625,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
                       <li key={index} className="flex items-start gap-2">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
                         <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
-                          <ReactMarkdown>{cause}</ReactMarkdown>
+                          <Markdown>{cause}</Markdown>
                         </div>
                       </li>
                     ))}
@@ -634,7 +651,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
                       <li key={index} className="flex items-start gap-2">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
                         <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
-                          <ReactMarkdown>{component}</ReactMarkdown>
+                          <Markdown>{component}</Markdown>
                         </div>
                       </li>
                     ))}
@@ -660,7 +677,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
                       <li key={index} className="flex items-start gap-2">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground mt-2 flex-shrink-0" />
                         <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
-                          <ReactMarkdown>{action}</ReactMarkdown>
+                          <Markdown>{action}</Markdown>
                         </div>
                       </li>
                     ))}
@@ -674,20 +691,27 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
           </>
         )}
 
-        {/* Direct Answer Results */}
-        {nlExtra && nlExtra.responseType === 'direct_answer' && result.rawResult && (
+        {/* Analytical Summary — show on agentic tab whenever agent produced a text response */}
+        {activeTab === 'agentic' && (result.querySummary || result.rawResult) && (
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
                 <CheckCircle2 className="h-5 w-5 text-green-600" />
                 Analytical Summary
               </CardTitle>
-              <CardDescription>Direct response to your query</CardDescription>
+              <CardDescription>Agent response to your query</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
-                <ReactMarkdown>{result.rawResult}</ReactMarkdown>
+                <Markdown>{result.querySummary || result.rawResult || ''}</Markdown>
               </div>
+            </CardContent>
+          </Card>
+        )}
+        {nlExtra && nlExtra.responseType === 'direct_answer' && activeTab === 'baseline' && (
+          <Card className="border-muted">
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              Baseline cannot execute tools. Switch to the Agentic tab for direct query results.
             </CardContent>
           </Card>
         )}

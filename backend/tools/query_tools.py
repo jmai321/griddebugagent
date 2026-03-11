@@ -83,8 +83,30 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_power_balance",
-        "description": "Get total load P/Q, total generation P/Q, and mismatch (always from input data if not converged).",
+        "description": "Get total load P/Q, total generation P/Q, total active power loss (MW), and load/gen ratio.",
         "parameters": {},
+    },
+    {
+        "name": "get_line_results",
+        "description": "Get power flow results for lines: p_from_mw, p_to_mw, q_from_mvar, q_to_mvar, pl_mw (losses), loading_percent. Only available if power flow converged.",
+        "parameters": {
+            "line_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Optional list of line indices; if omitted returns all lines.",
+            }
+        },
+    },
+    {
+        "name": "get_bus_results",
+        "description": "Get power flow results for buses: vm_pu, va_degree, p_mw, q_mvar. Only available if power flow converged.",
+        "parameters": {
+            "bus_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Optional list of bus indices; if omitted returns all buses.",
+            }
+        },
     },
 ]
 
@@ -170,6 +192,46 @@ class QueryTools:
         return {"available": True, "lines": lines, "trafos": trafos}
 
     @staticmethod
+    def get_line_results(net: pp.pandapowerNet, line_ids: list[int] | None = None, **kwargs) -> dict:
+        line_ids = line_ids if line_ids is not None else kwargs.get("line_ids")
+        if not getattr(net, "converged", False) or not hasattr(net, "res_line") or net.res_line.empty:
+            return {"available": False, "message": "Power flow did not converge or no results.", "lines": []}
+        df = net.res_line
+        if line_ids is not None and len(line_ids) > 0:
+            df = df.loc[df.index.intersection(line_ids)]
+        results = []
+        for idx, row in df.iterrows():
+            results.append({
+                "line_index": int(idx),
+                "p_from_mw": round(_safe_float(row.get("p_from_mw")), 4),
+                "p_to_mw": round(_safe_float(row.get("p_to_mw")), 4),
+                "q_from_mvar": round(_safe_float(row.get("q_from_mvar")), 4),
+                "q_to_mvar": round(_safe_float(row.get("q_to_mvar")), 4),
+                "pl_mw": round(_safe_float(row.get("pl_mw")), 4),
+                "loading_percent": round(_safe_float(row.get("loading_percent")), 2),
+            })
+        return {"available": True, "lines": results}
+
+    @staticmethod
+    def get_bus_results(net: pp.pandapowerNet, bus_ids: list[int] | None = None, **kwargs) -> dict:
+        bus_ids = bus_ids if bus_ids is not None else kwargs.get("bus_ids")
+        if not getattr(net, "converged", False) or not hasattr(net, "res_bus") or net.res_bus.empty:
+            return {"available": False, "message": "Power flow did not converge or no results.", "buses": []}
+        df = net.res_bus
+        if bus_ids is not None and len(bus_ids) > 0:
+            df = df.loc[df.index.intersection(bus_ids)]
+        results = []
+        for idx, row in df.iterrows():
+            results.append({
+                "bus_index": int(idx),
+                "vm_pu": round(_safe_float(row.get("vm_pu")), 4),
+                "va_degree": round(_safe_float(row.get("va_degree")), 4),
+                "p_mw": round(_safe_float(row.get("p_mw")), 4),
+                "q_mvar": round(_safe_float(row.get("q_mvar")), 4),
+            })
+        return {"available": True, "buses": results}
+
+    @staticmethod
     def get_power_balance(net: pp.pandapowerNet) -> dict:
         in_service_loads = net.load[net.load["in_service"]]
         total_load_p = float(in_service_loads["p_mw"].sum())
@@ -187,11 +249,13 @@ class QueryTools:
             in_service_gens = net.gen[net.gen["in_service"]]
             for _, row in in_service_gens.iterrows():
                 gen_capacity += _safe_float(row.get("max_p_mw", row.get("p_mw", 0)))
+        total_loss_p = round(total_gen_p - total_load_p, 4) if total_gen_p > 0 else None
         return {
             "total_load_p_mw": round(total_load_p, 2),
             "total_load_q_mvar": round(total_load_q, 2),
             "total_gen_p_mw": round(total_gen_p, 2),
             "total_gen_q_mvar": round(total_gen_q, 2),
+            "total_active_power_loss_mw": total_loss_p,
             "gen_capacity_mw": round(gen_capacity, 2),
             "load_gen_ratio": round(total_load_p / gen_capacity, 2) if gen_capacity > 0 else None,
         }

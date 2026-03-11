@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from typing import Any
 
 import pandapower as pp
@@ -205,6 +206,9 @@ class AgenticPipelineAgent:
                     return message.content or ""
 
             except Exception as e:
+                if "429" in str(e):
+                    time.sleep(5)
+                    continue
                 return f"Agent loop error at iteration {i}: {str(e)}"
 
         return "Max tool call iterations reached. Please review the gathered evidence."
@@ -219,9 +223,15 @@ class AgenticPipelineAgent:
             "get_voltage_profile": lambda: QueryTools.get_voltage_profile(net),
             "get_loading_profile": lambda: QueryTools.get_loading_profile(net),
             "get_power_balance": lambda: QueryTools.get_power_balance(net),
+            "get_line_results": lambda: QueryTools.get_line_results(net, **args),
+            "get_bus_results": lambda: QueryTools.get_bus_results(net, **args),
             "run_power_flow": lambda: SimulationTools.run_power_flow(net),
             "run_dc_power_flow": lambda: SimulationTools.run_dc_power_flow(net),
             "run_n1_contingency": lambda: SimulationTools.run_n1_contingency(net, **args),
+            "run_short_circuit": lambda: SimulationTools.run_short_circuit(net, **args),
+            "run_opf": lambda: SimulationTools.run_opf(net, **args),
+            "save_network_snapshot": lambda: SimulationTools.save_network_snapshot(net, **args),
+            "restore_network_snapshot": lambda: SimulationTools.restore_network_snapshot(net, **args),
             "run_full_diagnostics": lambda: DiagnosticTools.run_full_diagnostics(net),
             "check_overloads": lambda: DiagnosticTools.check_overloads(net, **args),
             "check_voltage_violations": lambda: DiagnosticTools.check_voltage_violations(net, **args),

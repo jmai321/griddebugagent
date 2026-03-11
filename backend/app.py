@@ -940,6 +940,7 @@ def run_rediagnose(req: ReDiagnoseRequest):
         # Before/After network states for visualization
         agentic["beforeState"] = before_state
         agentic["afterState"] = after_state
+        agentic["querySummary"] = iter_result.get("query_summary")
     except Exception as e:
         print(f"[REDIAGNOSE] Agentic error: {e}")
         agentic = {
@@ -1113,6 +1114,7 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             # Before/After network states for visualization
             out["beforeState"] = before_state
             out["afterState"] = after_state
+            out["querySummary"] = r.get("query_summary")
             # Compute reasoning quality
             out["reasoningQuality"] = _evaluate_reasoning_quality(
                 fix_history,
@@ -1261,6 +1263,11 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         before_state["affected_components"] = baseline.get("parsedAffectedComponents", {})
         agent_query = req.description if response_type == "direct_answer" else ""
         iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network, user_query=agent_query)
+        # Always generate query summary if user provided a description
+        if not agent_query and req.description.strip() and "query_summary" not in iter_result:
+            iter_result["query_summary"] = _iterative_agent._generate_query_summary(
+                req.description, iter_result.get("fix_history", []), iter_result.get("response", "")
+            )
         # Capture after state (fixed network)
         after_state = _serialize_network_state(net_iter, run_pf=False)
         iter_report = iter_result["response"]
@@ -1280,6 +1287,7 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         # Before/After network states for visualization
         agentic["beforeState"] = before_state
         agentic["afterState"] = after_state
+        agentic["querySummary"] = iter_result.get("query_summary")
         agentic["reasoningQuality"] = _evaluate_reasoning_quality(
             fix_history,
             agentic.get("rootCauses", []),

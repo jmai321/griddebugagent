@@ -208,7 +208,7 @@ class NLScenarioGenerator:
     descriptions into pandapower network mutations.
     """
 
-    def __init__(self, llm_client=None):
+    def __init__(self, llm_client):
         self.llm_client = llm_client
 
     def generate(
@@ -339,9 +339,6 @@ class NLScenarioGenerator:
             ),
         })
 
-        if self.llm_client is None:
-            return self._mock_response(description, network_name)
-
         try:
             completion = self.llm_client.chat.completions.create(
                 model="gpt-4o",
@@ -387,70 +384,3 @@ class NLScenarioGenerator:
 
         return None
 
-    def _mock_response(self, description: str, network_name: str) -> str:
-        """Generate a mock response when no LLM client is available."""
-        desc_lower = description.lower()
-
-        # Pattern match common descriptions for mock mode
-        if "scale" in desc_lower and "load" in desc_lower:
-            factor = 10.0
-            # Try to extract a number
-            numbers = re.findall(r"(\d+(?:\.\d+)?)\s*[x×]", desc_lower)
-            if numbers:
-                factor = float(numbers[0])
-            return json.dumps({
-                "mutation_code": f"net.load['p_mw'] *= {factor}\nnet.load['q_mvar'] *= {factor}",
-                "ground_truth": {
-                    "failure_type": "nonconvergence" if factor > 5 else "voltage",
-                    "root_causes": [
-                        f"All loads scaled by {factor}x",
-                        "Power demand exceeds available generation",
-                    ],
-                    "affected_components": {"load": "all"},
-                    "known_fix": "Reduce loads or add generation capacity",
-                },
-            })
-
-        if "generator" in desc_lower and ("remove" in desc_lower or "out of service" in desc_lower or "disable" in desc_lower):
-            return json.dumps({
-                "mutation_code": "net.gen['in_service'] = False",
-                "ground_truth": {
-                    "failure_type": "nonconvergence",
-                    "root_causes": [
-                        "All generators taken out of service",
-                        "Insufficient generation to meet demand",
-                    ],
-                    "affected_components": {"gen": "all"},
-                    "known_fix": "Restore generators to service",
-                },
-            })
-
-        if "line" in desc_lower and ("out of service" in desc_lower or "disconnect" in desc_lower or "remove" in desc_lower):
-            line_nums = re.findall(r"line\s*(\d+)", desc_lower)
-            target = int(line_nums[0]) if line_nums else 0
-            return json.dumps({
-                "mutation_code": f"net.line.at[{target}, 'in_service'] = False",
-                "ground_truth": {
-                    "failure_type": "thermal",
-                    "root_causes": [
-                        f"Line {target} taken out of service",
-                        "Power reroutes through remaining paths",
-                    ],
-                    "affected_components": {"line": [target]},
-                    "known_fix": "Restore the line or add parallel capacity",
-                },
-            })
-
-        # Default fallback
-        return json.dumps({
-            "mutation_code": "net.load['p_mw'] *= 5.0\nnet.load['q_mvar'] *= 5.0",
-            "ground_truth": {
-                "failure_type": "voltage",
-                "root_causes": [
-                    "Loads increased to cause stress on the network",
-                    f"User description: {description}",
-                ],
-                "affected_components": {"load": "all"},
-                "known_fix": "Reduce loads or add reactive compensation",
-            },
-        })

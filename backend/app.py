@@ -45,7 +45,12 @@ app.add_middleware(
 # ---------------------
 
 _openai_key = os.getenv("OPENAI_API_KEY", "")
-_llm_client = OpenAI(api_key=_openai_key) if _openai_key else None
+if not _openai_key:
+    raise RuntimeError(
+        "OPENAI_API_KEY is not set. "
+        "Create a .env file in the backend directory with: OPENAI_API_KEY=sk-..."
+    )
+_llm_client = OpenAI(api_key=_openai_key)
 _baseline_agent = BaselineAgent(llm_client=_llm_client)
 _iterative_agent = IterativeDebuggerAgent(llm_client=_llm_client)
 _nl_generator = NLScenarioGenerator(llm_client=_llm_client)

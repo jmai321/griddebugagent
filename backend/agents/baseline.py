@@ -108,11 +108,7 @@ class BaselineAgent:
     Uses function calling for structured output.
     """
 
-    def __init__(self, llm_client=None):
-        """
-        Args:
-            llm_client: An OpenAI-compatible client. If None, uses a mock.
-        """
+    def __init__(self, llm_client):
         self.llm_client = llm_client
         self.collector = EvidenceCollector()
 
@@ -163,9 +159,6 @@ class BaselineAgent:
         Returns:
             tuple of (prose_response, structured_data)
         """
-        if self.llm_client is None:
-            return self._mock_response(user_prompt), self._mock_structured()
-
         try:
             completion = self.llm_client.chat.completions.create(
                 model="gpt-4o",
@@ -231,46 +224,3 @@ class BaselineAgent:
 
         return "\n".join(lines)
 
-    def _mock_response(self, prompt: str) -> str:
-        """Generate a mock prose response when no LLM client is available."""
-        if "FAILED TO CONVERGE" in prompt:
-            return (
-                "## Root Causes\n"
-                "- Power flow did not converge, likely due to extreme "
-                "load/generation imbalance or network topology issues.\n\n"
-                "## Affected Components\n"
-                "- Unable to determine specific components without "
-                "converged results.\n\n"
-                "## Corrective Actions\n"
-                "- Run pp.diagnostic(net) for detailed checks\n"
-                "- Check for disconnected buses\n"
-                "- Reduce loads or add generation\n\n"
-                "## Confidence Assessment\n"
-                "- Low confidence — limited evidence without convergence."
-            )
-        return (
-            "## Root Causes\n"
-            "- Analysis of converged results needed.\n\n"
-            "## Affected Components\n"
-            "- See evidence report for details.\n\n"
-            "## Corrective Actions\n"
-            "- Address any voltage or thermal violations.\n\n"
-            "## Confidence Assessment\n"
-            "- Moderate confidence based on available data."
-        )
-
-    def _mock_structured(self) -> dict:
-        """Generate mock structured output when no LLM client is available."""
-        return {
-            "root_causes": ["Unable to determine without LLM"],
-            "affected_components": {
-                "bus": [],
-                "line": [],
-                "load": [],
-                "gen": [],
-                "trafo": [],
-                "ext_grid": []
-            },
-            "corrective_actions": ["Run with LLM enabled for full diagnosis"],
-            "confidence": "Low - mock response"
-        }

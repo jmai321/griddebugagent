@@ -11,7 +11,6 @@ from typing import Any
 
 import pandas as pd
 import pandapower as pp
-from pandapower.diagnostic import Diagnostic
 
 
 @dataclass
@@ -394,8 +393,7 @@ class EvidenceCollector:
     def _collect_diagnostics(self, net: pp.pandapowerNet, report: EvidenceReport) -> None:
         """Run pandapower diagnostic and store results."""
         try:
-            diag = Diagnostic()
-            result = diag.diagnose_network(
+            result = pp.diagnostic(
                 net,
                 report_style=None,
                 warnings_only=True,

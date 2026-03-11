@@ -90,7 +90,7 @@ class AgenticPipelineAgent:
 
     MAX_TOOL_CALLS = 10
 
-    def __init__(self, llm_client=None):
+    def __init__(self, llm_client):
         self.llm_client = llm_client
         self.preprocessor = Preprocessor()
 
@@ -162,9 +162,6 @@ class AgenticPipelineAgent:
         Run the ReAct loop: call LLM, parse tool calls, execute tools,
         feed results back. Repeat until final report or max iterations.
         """
-        if self.llm_client is None:
-            return self._mock_agentic_response(conversation)
-
         for i in range(self.MAX_TOOL_CALLS):
             try:
                 # Get tool schemas for function calling
@@ -278,20 +275,3 @@ class AgenticPipelineAgent:
                 lines.append(f"  → {action}")
         return "\n".join(lines)
 
-    def _mock_agentic_response(self, conversation: list[dict]) -> str:
-        """Mock response when no LLM client is available."""
-        return (
-            "FINAL REPORT:\n\n"
-            "## Root Causes\n"
-            "1. Based on rule-engine preprocessing, the primary failure mode "
-            "has been identified from triggered rules.\n"
-            "2. Additional tool-based investigation would refine this diagnosis.\n\n"
-            "## Affected Components\n"
-            "- See triggered rules and evidence for specific component indices.\n\n"
-            "## Corrective Actions\n"
-            "- Follow the suggested actions from triggered rules.\n"
-            "- Verify fixes by re-running power flow.\n\n"
-            "## Reasoning Trace\n"
-            "- Analyzed preprocessed evidence and rule classifications.\n"
-            "- (Mock mode: no actual tool calls were made)\n"
-        )

@@ -11,16 +11,34 @@ LLM-powered diagnostic tool for power flow simulation failures. Injects fault sc
 
 ## Quick Start
 
-### Backend
+### Docker Compose
+
+```bash
+# Add your OpenAI key to a .env in the project root
+echo "OPENAI_API_KEY=sk-proj-your-key-here" > .env
+
+# Build and start
+docker compose up --build
+
+# Without rebuilding
+docker compose up
+```
+
+### Manual
+
+**Backend** (Python 3.10+):
 
 ```bash
 cd backend
+python -m venv venv
+# Windows: .\venv\Scripts\Activate.ps1
+# macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # Add your OPENAI_API_KEY
+echo "OPENAI_API_KEY=sk-proj-your-key-here" > .env
 python app.py
 ```
 
-### Frontend
+**Frontend** (Node 20+):
 
 ```bash
 cd frontend
@@ -28,26 +46,29 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000. The frontend connects to the backend at http://localhost:8000.
+Frontend: http://localhost:3000 | Backend: http://localhost:8000
 
 ## Project Structure
 
 ```
 griddebugagent/
 ├── backend/
-│   ├── app.py                 # FastAPI endpoints, report parsing
+│   ├── app.py                     # FastAPI endpoints, report parsing
 │   ├── agents/
-│   │   ├── baseline.py        # LLM diagnosis with function calling
-│   │   └── iterative_debugger.py  # Agentic ReAct loop
+│   │   ├── baseline.py            # LLM diagnosis with function calling
+│   │   ├── agentic_pipeline.py    # ReAct loop with tool access
+│   │   └── iterative_debugger.py  # Diagnose + iterative fix-verify loop
 │   ├── rule_engine/
 │   │   ├── evidence_collector.py  # Collects power flow results
-│   │   └── preprocessor.py
-│   ├── scenarios/             # Fault injection (preset + NL-generated)
-│   └── tools/                 # Query, simulation, diagnostic tools
+│   │   ├── preprocessor.py
+│   │   └── rules.py
+│   ├── scenarios/                 # Fault injection (preset + NL-generated)
+│   └── tools/                     # Query, simulation, diagnostic tools
 ├── frontend/
 │   └── src/
-│       ├── components/        # React components
+│       ├── components/            # React components
 │       └── types/
+├── docker-compose.yml
 └── README.md
 ```
 
@@ -89,7 +110,3 @@ The `parsedAffectedComponents` field drives graph highlighting.
 | Query | `get_network_summary`, `get_bus_data`, `get_voltage_profile`, `get_loading_profile` |
 | Simulation | `run_power_flow`, `run_dc_power_flow`, `run_n1_contingency` |
 | Diagnostic | `check_overloads`, `check_voltage_violations`, `find_disconnected_areas` |
-
-## Configuration
-
-Set `OPENAI_API_KEY` in `backend/.env`. Without it, the system uses mock responses.

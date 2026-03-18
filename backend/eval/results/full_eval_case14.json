@@ -1,0 +1,899 @@
+{
+  "network": "case14",
+  "timestamp": "2026-03-16T17:34:22.544836",
+  "scenarios": [
+    {
+      "scenario_id": "normal_operation",
+      "category": "normal",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "normal",
+        "root_causes": [
+          "Network operates normally."
+        ],
+        "affected_components": {
+          "bus": [],
+          "line": [],
+          "trafo": []
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 3,
+          "thermal": 0,
+          "total": 3,
+          "buses": [
+            5,
+            6,
+            7
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 2541.3,
+        "predicted_components": {
+          "bus": [
+            5,
+            6,
+            7
+          ],
+          "line": [],
+          "load": [],
+          "gen": [],
+          "trafo": [],
+          "ext_grid": []
+        },
+        "root_causes": [
+          "Over-voltage at buses due to insufficient reactive power control"
+        ]
+      },
+      "agentic": {
+        "latency_ms": 10768.1,
+        "predicted_components": {},
+        "iterations_used": 4,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "extreme_load_scaling",
+      "category": "nonconvergence",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "nonconvergence",
+        "root_causes": [
+          "All loads scaled by 20.0\u00d7",
+          "Total active power demand far exceeds available generation",
+          "Newton-Raphson solver cannot find a feasible operating point"
+        ],
+        "affected_components": {
+          "load": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ]
+        }
+      },
+      "initial_state": {
+        "converged": false,
+        "violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 1744.6,
+        "predicted_components": {
+          "bus": [],
+          "line": [],
+          "load": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "gen": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "trafo": [],
+          "ext_grid": [
+            0
+          ]
+        },
+        "root_causes": [
+          "Excessive load compared to generation capacity"
+        ]
+      },
+      "agentic": {
+        "latency_ms": 16857.6,
+        "predicted_components": {},
+        "iterations_used": 9,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "all_generators_removed",
+      "category": "nonconvergence",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "nonconvergence",
+        "root_causes": [
+          "All generators taken out of service",
+          "Ext_grid alone cannot satisfy total demand",
+          "Severe voltage collapse across the network"
+        ],
+        "affected_components": {
+          "gen": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "sgen": []
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 8,
+          "thermal": 0,
+          "total": 8,
+          "buses": [
+            2,
+            3,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 3832.6,
+        "predicted_components": {},
+        "root_causes": []
+      },
+      "agentic": {
+        "latency_ms": 35679.8,
+        "predicted_components": {},
+        "iterations_used": 8,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "near_zero_impedance",
+      "category": "nonconvergence",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "nonconvergence",
+        "root_causes": [
+          "Line 0 has near-zero impedance",
+          "Admittance matrix becomes nearly singular",
+          "Numerical precision issues prevent convergence"
+        ],
+        "affected_components": {
+          "line": [
+            0
+          ]
+        }
+      },
+      "initial_state": {
+        "converged": false,
+        "violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 2988.3,
+        "predicted_components": {
+          "bus": [],
+          "line": [],
+          "load": [],
+          "gen": [
+            1,
+            2,
+            3
+          ],
+          "trafo": [],
+          "ext_grid": []
+        },
+        "root_causes": [
+          "Disconnected or non-operational generators leading to insufficient active power generation."
+        ]
+      },
+      "agentic": {
+        "latency_ms": 122919.9,
+        "predicted_components": {},
+        "iterations_used": 18,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "disconnected_subnetwork",
+      "category": "nonconvergence",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "nonconvergence",
+        "root_causes": [
+          "Bus 1 is disconnected from the main grid",
+          "Lines [0, 2, 3, 4] taken out of service",
+          "Isolated loads have no power supply path"
+        ],
+        "affected_components": {
+          "bus": [
+            1
+          ],
+          "line": [
+            0,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 3,
+          "thermal": 0,
+          "total": 3,
+          "buses": [
+            4,
+            5,
+            7
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 2651.5,
+        "predicted_components": {
+          "bus": [
+            4,
+            5,
+            7
+          ],
+          "line": [],
+          "load": [],
+          "gen": [],
+          "trafo": [],
+          "ext_grid": []
+        },
+        "root_causes": [
+          "Voltage violations at buses due to insufficient reactive power support or improper voltage setpoints."
+        ]
+      },
+      "agentic": {
+        "latency_ms": 158332.8,
+        "predicted_components": {},
+        "iterations_used": 23,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "heavy_loading_undervoltage",
+      "category": "voltage",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "voltage",
+        "root_causes": [
+          "All loads scaled by 3.0\u00d7",
+          "Increased reactive power demand causes voltage drop",
+          "Buses far from generation experience under-voltage"
+        ],
+        "affected_components": {
+          "load": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "bus": [
+            3,
+            4,
+            8,
+            9,
+            13
+          ]
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 7,
+          "thermal": 0,
+          "total": 7,
+          "buses": [
+            3,
+            4,
+            5,
+            7,
+            8,
+            9,
+            13
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 6123.9,
+        "predicted_components": {
+          "bus": [
+            3,
+            4,
+            5,
+            7,
+            8,
+            9,
+            13
+          ],
+          "line": [],
+          "load": [],
+          "gen": [],
+          "trafo": [],
+          "ext_grid": []
+        },
+        "root_causes": [
+          "Excessive load compared to generation capacity",
+          "Under-voltage at multiple buses",
+          "Over-voltage at some buses"
+        ]
+      },
+      "agentic": {
+        "latency_ms": 156646.8,
+        "predicted_components": {},
+        "iterations_used": 31,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "excess_generation_overvoltage",
+      "category": "voltage",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "voltage",
+        "root_causes": [
+          "Generator output scaled by 3.0\u00d7",
+          "Loads reduced to 0.3\u00d7",
+          "Ext_grid voltage setpoint raised to 1.08 pu",
+          "Active power surplus with light loading causes over-voltage"
+        ],
+        "affected_components": {
+          "gen": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "bus": [
+            0,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13
+          ]
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 10,
+          "thermal": 0,
+          "total": 10,
+          "buses": [
+            0,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 5797.1,
+        "predicted_components": {
+          "bus": [
+            0,
+            5,
+            6,
+            7,
+            8
+          ],
+          "line": [],
+          "load": [],
+          "gen": [],
+          "trafo": [],
+          "ext_grid": []
+        },
+        "root_causes": [
+          "Over-voltage conditions on multiple buses"
+        ]
+      },
+      "agentic": {
+        "latency_ms": 131323.8,
+        "predicted_components": {},
+        "iterations_used": 18,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "reactive_imbalance",
+      "category": "voltage",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "voltage",
+        "root_causes": [
+          "Large inductive loads (50.0 Mvar) at buses [11, 12, 13]",
+          "No reactive compensation to offset the demand",
+          "Voltage depression at remote buses"
+        ],
+        "affected_components": {
+          "bus": [
+            11,
+            12,
+            13,
+            11,
+            12,
+            13
+          ]
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 4,
+          "thermal": 0,
+          "total": 4,
+          "buses": [
+            5,
+            7,
+            11,
+            13
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 3318.6,
+        "predicted_components": {},
+        "root_causes": []
+      },
+      "agentic": {
+        "latency_ms": 133584.6,
+        "predicted_components": {},
+        "iterations_used": 20,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 2,
+          "thermal": 0,
+          "total": 2,
+          "buses": [
+            11,
+            13
+          ],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "concentrated_loading",
+      "category": "thermal",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "thermal",
+        "root_causes": [
+          "Large load (100.0 MW) added at bus 2",
+          "Power must flow through few connecting lines",
+          "Connected lines exceed thermal rating"
+        ],
+        "affected_components": {
+          "bus": [
+            2
+          ],
+          "line": []
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 2,
+          "thermal": 0,
+          "total": 2,
+          "buses": [
+            5,
+            7
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 2472.1,
+        "predicted_components": {},
+        "root_causes": []
+      },
+      "agentic": {
+        "latency_ms": 28939.5,
+        "predicted_components": {},
+        "iterations_used": 4,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "reduced_thermal_limits",
+      "category": "thermal",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "thermal",
+        "root_causes": [
+          "Thermal limits of lines [0, 1, 2] reduced to 30%",
+          "Lines are now overloaded even under normal conditions",
+          "Simulates aging equipment or de-rated conductors"
+        ],
+        "affected_components": {
+          "line": []
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 3,
+          "thermal": 0,
+          "total": 3,
+          "buses": [
+            5,
+            6,
+            7
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 4279.9,
+        "predicted_components": {
+          "bus": [
+            5,
+            6,
+            7
+          ],
+          "line": [],
+          "load": [],
+          "gen": [],
+          "trafo": [],
+          "ext_grid": []
+        },
+        "root_causes": [
+          "Over-voltage at buses due to excessive reactive power generation or insufficient reactive power absorption."
+        ]
+      },
+      "agentic": {
+        "latency_ms": 29246.3,
+        "predicted_components": {},
+        "iterations_used": 4,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "topology_redirection",
+      "category": "thermal",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "thermal",
+        "root_causes": [
+          "Line 0 taken out of service",
+          "Power reroutes through alternative paths",
+          "Remaining lines become overloaded due to redirected flow"
+        ],
+        "affected_components": {
+          "line": [
+            0
+          ]
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 2,
+          "thermal": 0,
+          "total": 2,
+          "buses": [
+            5,
+            7
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 3555.8,
+        "predicted_components": {
+          "bus": [
+            5,
+            7
+          ],
+          "line": [],
+          "load": [],
+          "gen": [],
+          "trafo": [],
+          "ext_grid": []
+        },
+        "root_causes": [
+          "Over-voltage at buses due to insufficient reactive power support or incorrect voltage setpoints."
+        ]
+      },
+      "agentic": {
+        "latency_ms": 24707.2,
+        "predicted_components": {},
+        "iterations_used": 5,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "line_contingency_overload",
+      "category": "contingency",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "contingency",
+        "root_causes": [
+          "N\u22121 line contingency causes thermal overload",
+          "Contingency analysis ran without critical violations",
+          "Removing one line redirects flow and overloads others"
+        ],
+        "affected_components": {
+          "line": []
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 3,
+          "thermal": 0,
+          "total": 3,
+          "buses": [
+            5,
+            6,
+            7
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 4112.7,
+        "predicted_components": {},
+        "root_causes": []
+      },
+      "agentic": {
+        "latency_ms": 29188.5,
+        "predicted_components": {},
+        "iterations_used": 5,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    },
+    {
+      "scenario_id": "trafo_contingency_voltage",
+      "category": "contingency",
+      "network": "case14",
+      "ground_truth": {
+        "failure_type": "contingency",
+        "root_causes": [
+          "N\u22121 transformer contingency causes voltage violations",
+          "Removing a transformer changes voltage regulation",
+          "Downstream buses may experience under- or over-voltage"
+        ],
+        "affected_components": {
+          "trafo": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "bus": [
+            0,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ]
+        }
+      },
+      "initial_state": {
+        "converged": true,
+        "violations": {
+          "voltage": 3,
+          "thermal": 0,
+          "total": 3,
+          "buses": [
+            5,
+            6,
+            7
+          ],
+          "lines": [],
+          "trafos": []
+        }
+      },
+      "baseline": {
+        "latency_ms": 4003.8,
+        "predicted_components": {},
+        "root_causes": []
+      },
+      "agentic": {
+        "latency_ms": 33819.0,
+        "predicted_components": {},
+        "iterations_used": 4,
+        "final_converged": true,
+        "final_violations": {
+          "voltage": 0,
+          "thermal": 0,
+          "total": 0,
+          "buses": [],
+          "lines": [],
+          "trafos": []
+        },
+        "fix_success": true
+      }
+    }
+  ]
+}

@@ -110,3 +110,7 @@ The `parsedAffectedComponents` field drives graph highlighting.
 | Query | `get_network_summary`, `get_bus_data`, `get_voltage_profile`, `get_loading_profile` |
 | Simulation | `run_power_flow`, `run_dc_power_flow`, `run_n1_contingency` |
 | Diagnostic | `check_overloads`, `check_voltage_violations`, `find_disconnected_areas` |
+
+## Evaluation
+
+See [backend/eval/results/README.md](backend/eval/results/README.md) for evaluation results on IEEE 14-bus, 30-bus, and 57-bus networks.

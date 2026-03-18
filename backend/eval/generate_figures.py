@@ -167,7 +167,8 @@ def fig3_scaling_analysis(all_data, output_dir):
 
         latencies = [s['agentic']['latency_ms'] / 1000
                      for s in scenarios if 'agentic' in s and 'error' not in s]
-        iterations = [s['agentic']['iterations_used']
+        # Support both old (iterations_used) and new (tool_calls) field names
+        iterations = [s['agentic'].get('tool_calls', s['agentic'].get('iterations_used', 0))
                       for s in scenarios if 'agentic' in s and 'error' not in s]
 
         metrics['repair'].append(success / total * 100 if total > 0 else 0)
@@ -220,8 +221,9 @@ def fig3_scaling_analysis(all_data, output_dir):
 
 def fig4_baseline_detection(all_data, output_dir):
     """
-    Grouped bar chart: Baseline single-pass detection accuracy.
-    Shows how well the baseline (non-agentic) pipeline identifies affected components.
+    Two-panel figure: Baseline single-pass detection accuracy.
+    Left: Bus detection (voltage violations) for all networks.
+    Right: Line detection (thermal violations) for networks with line violations.
     """
     def compute_pr(predicted_set, actual_set):
         if not predicted_set and not actual_set:
@@ -234,39 +236,54 @@ def fig4_baseline_detection(all_data, output_dir):
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
         return precision, recall, f1
 
+    def compute_detection_metrics(all_data, pred_key, actual_key):
+        """Compute detection metrics for a component type."""
+        results = {}
+        for network, data in all_data.items():
+            all_p, all_r, all_f1 = [], [], []
+            total_actual = 0
+
+            for s in data['scenarios']:
+                if 'baseline' not in s or 'initial_state' not in s:
+                    continue
+                predicted = set(s.get('baseline', {}).get('predicted_components', {}).get(pred_key, []))
+                actual = set(s.get('initial_state', {}).get('violations', {}).get(actual_key, []))
+                total_actual += len(actual)
+                p, r, f1 = compute_pr(predicted, actual)
+                all_p.append(p)
+                all_r.append(r)
+                all_f1.append(f1)
+
+            results[network] = {
+                'precision': sum(all_p) / len(all_p) * 100 if all_p else 0,
+                'recall': sum(all_r) / len(all_r) * 100 if all_r else 0,
+                'f1': sum(all_f1) / len(all_f1) * 100 if all_f1 else 0,
+                'total_actual': total_actual
+            }
+        return results
+
     networks = list(all_data.keys())
     labels = [NETWORK_LABELS[n] for n in networks]
 
-    results = {}
-    for network in networks:
-        data = all_data[network]
-        all_p, all_r, all_f1 = [], [], []
+    # Compute metrics for bus and line detection
+    bus_results = compute_detection_metrics(all_data, 'bus', 'buses')
+    line_results = compute_detection_metrics(all_data, 'line', 'lines')
 
-        for s in data['scenarios']:
-            if 'baseline' not in s or 'initial_state' not in s:
-                continue
-            predicted = set(s.get('baseline', {}).get('predicted_components', {}).get('bus', []))
-            actual = set(s.get('initial_state', {}).get('violations', {}).get('buses', []))
-            p, r, f1 = compute_pr(predicted, actual)
-            all_p.append(p)
-            all_r.append(r)
-            all_f1.append(f1)
+    # Filter networks with actual line violations for line detection panel
+    line_networks = [n for n in networks if line_results[n]['total_actual'] > 0]
+    line_labels = [NETWORK_LABELS[n] for n in line_networks]
 
-        results[network] = {
-            'precision': sum(all_p) / len(all_p) * 100 if all_p else 0,
-            'recall': sum(all_r) / len(all_r) * 100 if all_r else 0,
-            'f1': sum(all_f1) / len(all_f1) * 100 if all_f1 else 0
-        }
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    x = np.arange(len(networks))
-    width = 0.25
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     metric_colors = ['#4C72B0', '#55A868', '#8172B3']
     metric_names = ['Precision', 'Recall', 'F1 Score']
 
+    # Left panel: Bus detection (all networks)
+    ax = axes[0]
+    x = np.arange(len(networks))
+    width = 0.25
+
     for i, (metric, color, name) in enumerate(zip(['precision', 'recall', 'f1'], metric_colors, metric_names)):
-        values = [results[n][metric] for n in networks]
+        values = [bus_results[n][metric] for n in networks]
         bars = ax.bar(x + i * width, values, width, label=name, color=color,
                       edgecolor='black', linewidth=0.5)
         for bar, val in zip(bars, values):
@@ -275,12 +292,38 @@ def fig4_baseline_detection(all_data, output_dir):
 
     ax.set_xlabel('Network')
     ax.set_ylabel('Score (%)')
-    ax.set_title('Baseline Pipeline: Component Detection Accuracy\n(Single-pass diagnosis without remediation, bus-level only)')
+    ax.set_title('Bus Detection (Voltage Violations)')
     ax.set_xticks(x + width)
     ax.set_xticklabels(labels)
-    ax.set_ylim(0, 100)
+    ax.set_ylim(0, 110)
     ax.legend(loc='upper right')
 
+    # Right panel: Line detection (only networks with line violations)
+    ax = axes[1]
+    if line_networks:
+        x = np.arange(len(line_networks))
+        for i, (metric, color, name) in enumerate(zip(['precision', 'recall', 'f1'], metric_colors, metric_names)):
+            values = [line_results[n][metric] for n in line_networks]
+            bars = ax.bar(x + i * width, values, width, label=name, color=color,
+                          edgecolor='black', linewidth=0.5)
+            for bar, val in zip(bars, values):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                        f'{val:.0f}%', ha='center', va='bottom', fontsize=9)
+
+        ax.set_xlabel('Network')
+        ax.set_ylabel('Score (%)')
+        ax.set_title('Line Detection (Thermal Violations)')
+        ax.set_xticks(x + width)
+        ax.set_xticklabels(line_labels)
+        ax.set_ylim(0, 110)
+        ax.legend(loc='upper right')
+    else:
+        ax.text(0.5, 0.5, 'No line violations\nin test scenarios', ha='center', va='center',
+                transform=ax.transAxes, fontsize=12)
+        ax.set_title('Line Detection (Thermal Violations)')
+
+    fig.suptitle('Baseline Pipeline: Component Detection Accuracy\n(Single-pass diagnosis without remediation)',
+                 fontsize=14, fontweight='bold', y=1.02)
     plt.tight_layout()
     plt.savefig(output_dir / 'fig4_baseline_detection.png')
     plt.close()

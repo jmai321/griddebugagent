@@ -166,6 +166,8 @@ def run_eval(network: str = "case14"):
                 "failure_type": ground_truth.failure_type,
                 "root_causes": ground_truth.root_causes,
                 "affected_components": ground_truth.affected_components,
+                "known_fix": ground_truth.known_fix,
+                "metadata": ground_truth.metadata,
             }
 
             # Run power flow on original
@@ -197,6 +199,9 @@ def run_eval(network: str = "case14"):
                 "latency_ms": round(baseline_latency, 1),
                 "predicted_components": baseline_components,
                 "root_causes": baseline_structured.get("root_causes", []) if baseline_structured else [],
+                "corrective_actions": baseline_structured.get("corrective_actions", []) if baseline_structured else [],
+                "confidence": baseline_structured.get("confidence", "") if baseline_structured else "",
+                "response": baseline_result.get("response", ""),
             }
             print(f"{baseline_latency:.0f}ms")
 
@@ -210,7 +215,11 @@ def run_eval(network: str = "case14"):
 
             final_converged = agentic_result.get("final_converged", False)
             final_violations = count_violations(net_agentic)
-            iterations = agentic_result.get("iterations_used", 0)
+
+            # Get fix_history and compute metrics
+            fix_history = agentic_result.get("fix_history", [])
+            tool_calls = len(fix_history)
+            react_iterations = len(set(h["iteration"] for h in fix_history)) if fix_history else 0
 
             # Determine fix success
             violations_decreased = final_violations["total"] <= initial_violations["total"]
@@ -218,15 +227,21 @@ def run_eval(network: str = "case14"):
 
             result["agentic"] = {
                 "latency_ms": round(agentic_latency, 1),
-                "predicted_components": {},  # Agentic doesn't use function calling the same way
-                "iterations_used": iterations,
+                "react_iterations": react_iterations,
+                "tool_calls": tool_calls,
                 "final_converged": final_converged,
                 "final_violations": final_violations,
                 "fix_success": fix_success,
+                "fix_history": fix_history,
+                "initial_diagnosis": agentic_result.get("initial_diagnosis"),
+                "final_state": agentic_result.get("final_state"),
+                "evidence": agentic_result.get("evidence"),
+                "response": agentic_result.get("response", ""),
+                "failure_category": agentic_result.get("failure_category", ""),
             }
 
             status = "FIXED" if fix_success else "NOT FIXED"
-            print(f"{agentic_latency:.0f}ms, {iterations} iters, {status}")
+            print(f"{agentic_latency:.0f}ms, {react_iterations} react, {tool_calls} tools, {status}")
 
         except Exception as e:
             print(f"    ERROR: {e}")
@@ -339,7 +354,7 @@ def generate_report(results_path: str = None):
         init_viol = r["initial_state"]["violations"].get("total", 0)
         final_viol = r["agentic"].get("final_violations", {}).get("total", 0)
         success = "Yes" if r["agentic"].get("fix_success", False) else "No"
-        print(f"| {r['scenario_id']} | {r['category']} | {init_conv} | {final_conv} | {init_viol}→{final_viol} | {success} |")
+        print(f"| {r['scenario_id']} | {r['category']} | {init_conv} | {final_conv} | {init_viol}->{final_viol} | {success} |")
 
     # Summary stats
     results = data["scenarios"]

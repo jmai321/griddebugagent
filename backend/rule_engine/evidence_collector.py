@@ -11,7 +11,6 @@ from typing import Any
 
 import pandas as pd
 import pandapower as pp
-from pandapower.diagnostic import Diagnostic
 
 
 @dataclass
@@ -169,13 +168,15 @@ class EvidenceReport:
                 lines.append(f"  Range: {self.voltage_min_pu:.4f} – {self.voltage_max_pu:.4f} pu")
                 lines.append(f"  Mean:  {self.voltage_mean_pu:.4f} pu")
             if self.undervoltage_buses:
-                lines.append(f"  Under-voltage (<0.95 pu): {len(self.undervoltage_buses)} buses")
+                lines.append(f"  Under-voltage (under bus-specific limit or default 0.95 pu): {len(self.undervoltage_buses)} buses")
                 for b in self.undervoltage_buses[:5]:
-                    lines.append(f"    Bus {b['index']}: {b['vm_pu']:.4f} pu")
+                    limit_str = f" (limit: {b['limit']:.4f} pu)" if 'limit' in b else ""
+                    lines.append(f"    Bus {b['index']}: {b['vm_pu']:.4f} pu{limit_str}")
             if self.overvoltage_buses:
-                lines.append(f"  Over-voltage (>1.05 pu): {len(self.overvoltage_buses)} buses")
+                lines.append(f"  Over-voltage (over bus-specific limit or default 1.05 pu): {len(self.overvoltage_buses)} buses")
                 for b in self.overvoltage_buses[:5]:
-                    lines.append(f"    Bus {b['index']}: {b['vm_pu']:.4f} pu")
+                    limit_str = f" (limit: {b['limit']:.4f} pu)" if 'limit' in b else ""
+                    lines.append(f"    Bus {b['index']}: {b['vm_pu']:.4f} pu{limit_str}")
 
             lines.append(f"\n── RESULT: Line Loading ({self.line_count} lines) ──")
             if self.max_line_loading_pct is not None:
@@ -256,21 +257,30 @@ class EvidenceCollector:
 
     def _collect_bus_results(self, net: pp.pandapowerNet, report: EvidenceReport) -> None:
         res = net.res_bus
+        bus_df = net.bus
         report.voltage_min_pu = float(res["vm_pu"].min())
         report.voltage_max_pu = float(res["vm_pu"].max())
         report.voltage_mean_pu = float(res["vm_pu"].mean())
 
-        for idx, row in res[res["vm_pu"] < self.v_min].iterrows():
-            report.undervoltage_buses.append({
-                "index": int(idx),
-                "vm_pu": round(float(row["vm_pu"]), 4),
-            })
-
-        for idx, row in res[res["vm_pu"] > self.v_max].iterrows():
-            report.overvoltage_buses.append({
-                "index": int(idx),
-                "vm_pu": round(float(row["vm_pu"]), 4),
-            })
+        for idx, row in res.iterrows():
+            vm_pu = float(row["vm_pu"])
+            
+            # Use specific limit if available, fallback to global
+            bus_v_min = bus_df.at[idx, "min_vm_pu"] if "min_vm_pu" in bus_df.columns and pd.notna(bus_df.at[idx, "min_vm_pu"]) else self.v_min
+            bus_v_max = bus_df.at[idx, "max_vm_pu"] if "max_vm_pu" in bus_df.columns and pd.notna(bus_df.at[idx, "max_vm_pu"]) else self.v_max
+            
+            if vm_pu < bus_v_min:
+                report.undervoltage_buses.append({
+                    "index": int(idx),
+                    "vm_pu": round(vm_pu, 4),
+                    "limit": bus_v_min,
+                })
+            elif vm_pu > bus_v_max:
+                report.overvoltage_buses.append({
+                    "index": int(idx),
+                    "vm_pu": round(vm_pu, 4),
+                    "limit": bus_v_max,
+                })
 
     def _collect_line_results(self, net: pp.pandapowerNet, report: EvidenceReport) -> None:
         res = net.res_line
@@ -383,8 +393,7 @@ class EvidenceCollector:
     def _collect_diagnostics(self, net: pp.pandapowerNet, report: EvidenceReport) -> None:
         """Run pandapower diagnostic and store results."""
         try:
-            diag = Diagnostic()
-            result = diag.diagnose_network(
+            result = pp.diagnostic(
                 net,
                 report_style=None,
                 warnings_only=True,

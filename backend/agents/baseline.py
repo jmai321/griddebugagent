@@ -4,6 +4,8 @@ Level 1: Baseline LLM Agent
 Passes raw solver outputs directly to an LLM for natural language
 explanation. No tool access — establishes what an LLM can infer
 from unstructured data alone.
+
+Uses OpenAI function calling for reliable structured output.
 """
 from __future__ import annotations
 
@@ -14,6 +16,47 @@ import pandapower as pp
 
 from rule_engine.evidence_collector import EvidenceCollector
 
+
+# Function schema for structured diagnosis output
+DIAGNOSIS_FUNCTION = {
+    "type": "function",
+    "function": {
+        "name": "report_diagnosis",
+        "description": "Report the diagnosis results with affected components",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "root_causes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of root causes, ranked from most to least likely"
+                },
+                "affected_components": {
+                    "type": "object",
+                    "properties": {
+                        "bus": {"type": "array", "items": {"type": "integer"}, "description": "Bus indices with violations"},
+                        "line": {"type": "array", "items": {"type": "integer"}, "description": "Line indices with violations"},
+                        "load": {"type": "array", "items": {"type": "integer"}, "description": "Load indices causing issues"},
+                        "gen": {"type": "array", "items": {"type": "integer"}, "description": "Generator indices causing issues"},
+                        "trafo": {"type": "array", "items": {"type": "integer"}, "description": "Transformer indices with violations"},
+                        "ext_grid": {"type": "array", "items": {"type": "integer"}, "description": "External grid indices"}
+                    },
+                    "required": ["bus", "line", "load", "gen", "trafo", "ext_grid"]
+                },
+                "corrective_actions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific corrective actions to fix the issues"
+                },
+                "confidence": {
+                    "type": "string",
+                    "description": "Confidence level assessment"
+                }
+            },
+            "required": ["root_causes", "affected_components", "corrective_actions", "confidence"]
+        }
+    }
+}
 
 SYSTEM_PROMPT = """\
 You are GridDebugAgent, an expert power systems engineer \
@@ -35,17 +78,14 @@ When the power flow CONVERGED but has violations:
 2. Check line/trafo loading for thermal overloads (>100%).
 3. Trace the violation to its root cause (e.g., heavy loading → voltage drop).
 
-## Output Format
+## Output Instructions
 
-Format your response as a structured diagnostic report:
-## Root Causes
-(Rank from most to least likely. Be specific — cite numbers from the evidence.)
-## Affected Components
-(List with specific types and indices, e.g., "Load 0-41", "Line 5", "Bus 3")
-## Corrective Actions
-(Minimal, engineering-feasible actions. Be specific.)
-## Confidence Assessment
-"""
+You MUST call the report_diagnosis function with your findings.
+
+In affected_components, list the SPECIFIC indices of components with violations or that \
+directly caused the failure. Use the exact indices from the evidence data.
+
+Also write a prose explanation in your message describing the diagnosis in detail."""
 
 USER_PROMPT_TEMPLATE = """\
 The following power flow simulation has {status}.
@@ -53,43 +93,43 @@ The following power flow simulation has {status}.
 Network: {network_name}
 Buses: {bus_count} | Lines: {line_count} | Generators: {gen_count} | Loads: {load_count}
 
+{user_query_str}
+
 {evidence_text}
 
-IMPORTANT: Focus on the LOAD vs GENERATION COMPARISON section when diagnosing non-convergence.
-Identify the SPECIFIC components (with indices) that are affected.
-Do NOT list generic pandapower warning names as root causes — they are often noise."""
+Analyze this evidence and call the report_diagnosis function with your findings. \
+Be specific — cite component indices from the evidence (e.g., Bus 5, Line 3, Gen 2)."""
 
 
 class BaselineAgent:
     """
     Level 1 agent: raw solver output → LLM explanation.
     No tool access, no rule engine — pure LLM interpretation.
+    Uses function calling for structured output.
     """
 
-    def __init__(self, llm_client=None):
-        """
-        Args:
-            llm_client: An OpenAI-compatible client. If None, uses a mock.
-        """
+    def __init__(self, llm_client):
         self.llm_client = llm_client
         self.collector = EvidenceCollector()
 
-    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown") -> dict[str, Any]:
+    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown", user_query: str = "") -> dict[str, Any]:
         """
         Run baseline diagnosis on a network.
 
         Args:
             net: pandapower network (after failed or converged PF attempt)
             network_name: name of the test network
+            user_query: optional user query
 
         Returns:
-            dict with keys: "prompt", "response", "evidence"
+            dict with keys: "prompt", "response", "evidence", "structured_output"
         """
         # Collect evidence
         report = self.collector.collect(net)
 
         # Build prompt
         status = "FAILED TO CONVERGE" if not report.converged else "CONVERGED"
+        user_query_str = f"== USER QUERY ==\n{user_query}\n" if user_query else ""
         prompt = USER_PROMPT_TEMPLATE.format(
             status=status,
             network_name=network_name,
@@ -97,24 +137,28 @@ class BaselineAgent:
             line_count=report.line_count,
             gen_count=report.gen_count,
             load_count=len(net.load),
+            user_query_str=user_query_str,
             evidence_text=report.to_text(),
         )
 
-        # Call LLM
-        response = self._call_llm(prompt)
+        # Call LLM with function calling
+        response, structured = self._call_llm(prompt)
 
         return {
             "level": "baseline",
             "prompt": prompt,
             "response": response,
             "evidence": report.to_dict(),
+            "structured_output": structured,
         }
 
-    def _call_llm(self, user_prompt: str) -> str:
-        """Call the LLM with the system + user prompt."""
-        if self.llm_client is None:
-            return self._mock_response(user_prompt)
+    def _call_llm(self, user_prompt: str) -> tuple[str, dict | None]:
+        """
+        Call the LLM with function calling for structured output.
 
+        Returns:
+            tuple of (prose_response, structured_data)
+        """
         try:
             completion = self.llm_client.chat.completions.create(
                 model="gpt-4o",
@@ -122,37 +166,61 @@ class BaselineAgent:
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
+                tools=[DIAGNOSIS_FUNCTION],
+                tool_choice={"type": "function", "function": {"name": "report_diagnosis"}},
                 temperature=0.3,
                 max_tokens=2000,
             )
-            return completion.choices[0].message.content
-        except Exception as e:
-            return f"LLM call failed: {str(e)}"
 
-    def _mock_response(self, prompt: str) -> str:
-        """Generate a mock response when no LLM client is available."""
-        if "FAILED TO CONVERGE" in prompt:
-            return (
-                "## Root Causes\n"
-                "- Power flow did not converge, likely due to extreme "
-                "load/generation imbalance or network topology issues.\n\n"
-                "## Affected Components\n"
-                "- Unable to determine specific components without "
-                "converged results.\n\n"
-                "## Corrective Actions\n"
-                "- Run pp.diagnostic(net) for detailed checks\n"
-                "- Check for disconnected buses\n"
-                "- Reduce loads or add generation\n\n"
-                "## Confidence Assessment\n"
-                "- Low confidence — limited evidence without convergence."
-            )
-        return (
-            "## Root Causes\n"
-            "- Analysis of converged results needed.\n\n"
-            "## Affected Components\n"
-            "- See evidence report for details.\n\n"
-            "## Corrective Actions\n"
-            "- Address any voltage or thermal violations.\n\n"
-            "## Confidence Assessment\n"
-            "- Moderate confidence based on available data."
-        )
+            message = completion.choices[0].message
+            prose = message.content or ""
+
+            # Extract structured data from function call
+            structured = None
+            if message.tool_calls:
+                for tool_call in message.tool_calls:
+                    if tool_call.function.name == "report_diagnosis":
+                        try:
+                            structured = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError:
+                            pass
+                        break
+
+            # Build prose response from structured data if no prose
+            if not prose and structured:
+                prose = self._build_prose_from_structured(structured)
+
+            return prose, structured
+
+        except Exception as e:
+            return f"LLM call failed: {str(e)}", None
+
+    def _build_prose_from_structured(self, structured: dict) -> str:
+        """Build a prose report from structured data."""
+        lines = []
+
+        lines.append("## Root Causes")
+        for cause in structured.get("root_causes", []):
+            lines.append(f"- {cause}")
+        lines.append("")
+
+        lines.append("## Affected Components")
+        affected = structured.get("affected_components", {})
+        component_names = {"bus": "Buses", "line": "Lines", "load": "Loads",
+                          "gen": "Generators", "trafo": "Transformers", "ext_grid": "External Grids"}
+        for comp_type, display_name in component_names.items():
+            indices = affected.get(comp_type, [])
+            if indices:
+                lines.append(f"- {display_name}: {', '.join(map(str, indices))}")
+        lines.append("")
+
+        lines.append("## Corrective Actions")
+        for action in structured.get("corrective_actions", []):
+            lines.append(f"- {action}")
+        lines.append("")
+
+        lines.append("## Confidence Assessment")
+        lines.append(f"- {structured.get('confidence', 'Unknown')}")
+
+        return "\n".join(lines)
+

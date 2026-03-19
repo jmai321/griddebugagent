@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from typing import Any
 
 import pandapower as pp
@@ -17,6 +18,7 @@ from rule_engine.preprocessor import Preprocessor
 from tools.query_tools import QueryTools
 from tools.simulation_tools import SimulationTools
 from tools.diagnostic_tools import DiagnosticTools
+from tools.grid_actions import GridActions
 
 
 # ── Prompt templates ───────────────────────────────────────────────
@@ -28,9 +30,9 @@ access for deep diagnosis of power flow simulation issues.
 You have been provided with preprocessed evidence from a pandapower simulation, \
 including rule-engine classifications that have already identified likely failure modes.
 
-## Analysis Strategy
+## Analysis & Iterative Debugging Strategy
 
-1. FIRST read the triggered rules carefully — they pre-classify the failure mode.
+1. FIRST read the user query (if provided) and the triggered rules carefully. If the user query describes a specific contingency or network mutation (e.g., disconnecting a line), consider that action as the primary root cause. The triggered rules pre-classify the resulting symptoms (e.g., undervoltage, thermal overloads).
 2. For NON-CONVERGENCE: Focus on the load-vs-generation balance. If loads far \
 exceed generation, the root cause is load/generation imbalance, NOT impedance or \
 bus indexing issues. Use tools to verify the load/gen data.
@@ -38,16 +40,28 @@ bus indexing issues. Use tools to verify the load/gen data.
 then trace back to root cause (overloaded feeder, missing reactive support).
 4. For THERMAL OVERLOADS: Use get_loading_profile to rank overloaded elements, \
 then check contingency impacts.
-5. Use tools STRATEGICALLY — don't call every tool, only those that test your hypothesis.
+5. ITERATIVE DEBUGGING: If you identify a root cause, you MUST try to fix it using the Grid Action tools \
+(e.g., curtail_load, adjust_generation, switch_line). After taking an action, you MUST call run_power_flow \
+to verify if the network converges and if violations are resolved. \
+Repeat this propose->act->verify loop until the network is secure (0 violations) or you reach a dead end.
+6. Use tools STRATEGICALLY — plan your actions and observe the results.
 
 ## Available Tools
 {tool_descriptions}
 
 ## Output Requirements
 
-When done analyzing, output "FINAL REPORT:" followed by:
-## Root Causes (ranked, with specific numbers from evidence)
-## Affected Components (type + specific indices, e.g. "Load 0-41", "Bus 3")
+If a specific USER QUERY is provided, your primary goal is to answer that query directly using your tools. You MUST output ONLY the direct answer exactly as requested (e.g., a simple bulleted list of violations). Do NOT use the standard Root Causes formatting, do NOT write "FINAL REPORT:", and do NOT include conversational filler like "I will identify...". Just output the exact requested information.
+
+If the user asks to summarize contingency limit violations, you MUST use exactly this concise one-line format for each tested outage:
+- Line <ID> outage: <N> voltage violation (bus <ID> at <V> pu < <LIMIT> pu); <M> branch overloads.
+or
+- Line <ID> outage: no operational limit violations.
+Make sure to apply this format strictly and do not add any conversational text.
+
+If no user query is provided, or the query asks for a general diagnosis without specific formatting requirements, output "FINAL REPORT:" followed by:
+## Root Causes (Identify the initiating event, e.g., line disconnection, as the primary root cause. Do NOT list symptoms like "Undervoltage" as the root cause if an initiating event is known.)
+## Affected Components (List the components experiencing symptoms or involved in the failure, e.g. "Bus 117: Under-voltage")
 ## Corrective Actions (minimal, engineering-feasible, specific)
 ## Reasoning Trace (summarize analysis steps and tool findings)
 """
@@ -55,6 +69,7 @@ When done analyzing, output "FINAL REPORT:" followed by:
 USER_PROMPT_TEMPLATE = """\
 == NETWORK: {network_name} ==
 == FAILURE CATEGORY: {failure_category} ==
+{user_query_str}
 
 {evidence_text}
 
@@ -76,11 +91,11 @@ class AgenticPipelineAgent:
 
     MAX_TOOL_CALLS = 10
 
-    def __init__(self, llm_client=None):
+    def __init__(self, llm_client):
         self.llm_client = llm_client
         self.preprocessor = Preprocessor()
 
-    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown") -> dict[str, Any]:
+    def diagnose(self, net: pp.pandapowerNet, network_name: str = "unknown", user_query: str = "") -> dict[str, Any]:
         """
         Run agentic diagnosis with tool access.
 
@@ -95,9 +110,11 @@ class AgenticPipelineAgent:
         rules_text = self._format_rules(context["triggered_rules"])
         network_summary = json.dumps(context["network_summary"], indent=2)
 
+        user_query_str = f"== USER QUERY ==\n{user_query}\n" if user_query else ""
         user_prompt = USER_PROMPT_TEMPLATE.format(
             network_name=network_name,
             failure_category=context["failure_category"],
+            user_query_str=user_query_str,
             evidence_text=context["evidence_text"],
             rules_text=rules_text,
             network_summary=network_summary,
@@ -128,7 +145,8 @@ class AgenticPipelineAgent:
         all_tools = (
             QueryTools.TOOL_DEFINITIONS +
             SimulationTools.TOOL_DEFINITIONS +
-            DiagnosticTools.TOOL_DEFINITIONS
+            DiagnosticTools.TOOL_DEFINITIONS +
+            GridActions.TOOL_DEFINITIONS
         )
         tool_desc = "\n".join(
             f"- {t['name']}: {t['description']}" for t in all_tools
@@ -145,9 +163,6 @@ class AgenticPipelineAgent:
         Run the ReAct loop: call LLM, parse tool calls, execute tools,
         feed results back. Repeat until final report or max iterations.
         """
-        if self.llm_client is None:
-            return self._mock_agentic_response(conversation)
-
         for i in range(self.MAX_TOOL_CALLS):
             try:
                 # Get tool schemas for function calling
@@ -191,6 +206,9 @@ class AgenticPipelineAgent:
                     return message.content or ""
 
             except Exception as e:
+                if "429" in str(e):
+                    time.sleep(5)
+                    continue
                 return f"Agent loop error at iteration {i}: {str(e)}"
 
         return "Max tool call iterations reached. Please review the gathered evidence."
@@ -205,13 +223,23 @@ class AgenticPipelineAgent:
             "get_voltage_profile": lambda: QueryTools.get_voltage_profile(net),
             "get_loading_profile": lambda: QueryTools.get_loading_profile(net),
             "get_power_balance": lambda: QueryTools.get_power_balance(net),
+            "get_line_results": lambda: QueryTools.get_line_results(net, **args),
+            "get_bus_results": lambda: QueryTools.get_bus_results(net, **args),
             "run_power_flow": lambda: SimulationTools.run_power_flow(net),
             "run_dc_power_flow": lambda: SimulationTools.run_dc_power_flow(net),
             "run_n1_contingency": lambda: SimulationTools.run_n1_contingency(net, **args),
+            "run_short_circuit": lambda: SimulationTools.run_short_circuit(net, **args),
+            "run_opf": lambda: SimulationTools.run_opf(net, **args),
+            "save_network_snapshot": lambda: SimulationTools.save_network_snapshot(net, **args),
+            "restore_network_snapshot": lambda: SimulationTools.restore_network_snapshot(net, **args),
             "run_full_diagnostics": lambda: DiagnosticTools.run_full_diagnostics(net),
             "check_overloads": lambda: DiagnosticTools.check_overloads(net, **args),
             "check_voltage_violations": lambda: DiagnosticTools.check_voltage_violations(net, **args),
             "find_disconnected_areas": lambda: DiagnosticTools.find_disconnected_areas(net),
+            "adjust_generation": lambda: GridActions.adjust_generation(net, **args),
+            "curtail_load": lambda: GridActions.curtail_load(net, **args),
+            "switch_line": lambda: GridActions.switch_line(net, **args),
+            "switch_shunt": lambda: GridActions.switch_shunt(net, **args),
         }
 
         if name in tool_map:
@@ -226,7 +254,8 @@ class AgenticPipelineAgent:
         all_tools = (
             QueryTools.TOOL_DEFINITIONS +
             SimulationTools.TOOL_DEFINITIONS +
-            DiagnosticTools.TOOL_DEFINITIONS
+            DiagnosticTools.TOOL_DEFINITIONS +
+            GridActions.TOOL_DEFINITIONS
         )
         openai_tools = []
         for t in all_tools:
@@ -256,20 +285,3 @@ class AgenticPipelineAgent:
                 lines.append(f"  → {action}")
         return "\n".join(lines)
 
-    def _mock_agentic_response(self, conversation: list[dict]) -> str:
-        """Mock response when no LLM client is available."""
-        return (
-            "FINAL REPORT:\n\n"
-            "## Root Causes\n"
-            "1. Based on rule-engine preprocessing, the primary failure mode "
-            "has been identified from triggered rules.\n"
-            "2. Additional tool-based investigation would refine this diagnosis.\n\n"
-            "## Affected Components\n"
-            "- See triggered rules and evidence for specific component indices.\n\n"
-            "## Corrective Actions\n"
-            "- Follow the suggested actions from triggered rules.\n"
-            "- Verify fixes by re-running power flow.\n\n"
-            "## Reasoning Trace\n"
-            "- Analyzed preprocessed evidence and rule classifications.\n"
-            "- (Mock mode: no actual tool calls were made)\n"
-        )

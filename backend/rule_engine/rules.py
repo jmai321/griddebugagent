@@ -87,7 +87,7 @@ class RuleEngine:
             rule_name="undervoltage",
             triggered=triggered,
             severity="warning" if len(rpt.undervoltage_buses) <= 3 else "critical",
-            description=f"{len(rpt.undervoltage_buses)} bus(es) below 0.95 pu voltage.",
+            description=f"{len(rpt.undervoltage_buses)} bus(es) below their minimum pu voltage limits.",
             evidence={"buses": rpt.undervoltage_buses},
             suggested_actions=[
                 "Add shunt capacitors at affected buses",
@@ -103,7 +103,7 @@ class RuleEngine:
             rule_name="overvoltage",
             triggered=triggered,
             severity="warning" if len(rpt.overvoltage_buses) <= 3 else "critical",
-            description=f"{len(rpt.overvoltage_buses)} bus(es) above 1.05 pu voltage.",
+            description=f"{len(rpt.overvoltage_buses)} bus(es) above their maximum pu voltage limits.",
             evidence={"buses": rpt.overvoltage_buses},
             suggested_actions=[
                 "Reduce generator voltage setpoints",

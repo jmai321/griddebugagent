@@ -4,7 +4,7 @@ LLM-powered diagnostic tool for power flow simulation failures. Injects fault sc
 
 ## Demo
 
-[![Demo Video](https://drive.google.com/thumbnail?id=1enT2IiCJD0v6ZFV9r6TK81vU7eAcnYRJ&sz=w1280)](https://drive.google.com/file/d/1enT2IiCJD0v6ZFV9r6TK81vU7eAcnYRJ/view?usp=sharing)
+[![Demo Video](https://img.youtube.com/vi/QCgl5L9DnQM/maxresdefault.jpg)](https://youtu.be/QCgl5L9DnQM)
 
 ## Features
 

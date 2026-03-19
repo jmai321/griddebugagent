@@ -2,6 +2,10 @@
 
 LLM-powered diagnostic tool for power flow simulation failures. Injects fault scenarios into IEEE test networks (via pandapower), runs diagnosis through baseline and agentic pipelines, and produces structured reports with root causes, affected components, and corrective actions.
 
+## Demo
+
+[![Demo Video](https://drive.google.com/thumbnail?id=1enT2IiCJD0v6ZFV9r6TK81vU7eAcnYRJ&sz=w1280)](https://drive.google.com/file/d/1enT2IiCJD0v6ZFV9r6TK81vU7eAcnYRJ/view)
+
 ## Features
 
 - **Baseline Pipeline**: Single LLM call with evidence from power flow results. Uses OpenAI function calling for reliable structured output.

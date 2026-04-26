@@ -100,6 +100,8 @@ export interface PipelineResult {
   afterState?: RawNetworkState;
   /** Concise answer to the user's query, separate from fix narrative (agentic only). */
   querySummary?: string;
+  /** Wall-clock latency of the pipeline run, in milliseconds. */
+  latencyMs?: number;
 }
 
 // Only 2 tabs: Baseline (manual) and Agentic (auto-fix)

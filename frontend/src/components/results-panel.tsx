@@ -3,7 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PipelineResult, DiagnoseNLResponse } from '@/types/diagnostic';
-import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp, Wrench, Activity } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Zap, Loader2, Lightbulb, Code2, ChevronDown, ChevronUp, Wrench, Activity, Clock } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -218,6 +218,16 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <h2 className="text-xl font-semibold">Diagnostic Results</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+          {/* Latency indicator */}
+          {result?.latencyMs != null && (
+            <Badge variant="outline" className="flex items-center gap-1 text-muted-foreground">
+              <Clock className="h-3 w-3" />
+              {result.latencyMs >= 1000
+                ? `${(result.latencyMs / 1000).toFixed(1)}s`
+                : `${Math.round(result.latencyMs)}ms`}
+            </Badge>
+          )}
           {/* Convergence indicator */}
           {result && (() => {
             const converged = activeTab === 'agentic'
@@ -246,6 +256,7 @@ export function ResultsPanel({ baselineResult, agenticResult, nlExtra, isLoading
               );
             }
           })()}
+          </div>
         </div>
 
         {/* Tab buttons */}

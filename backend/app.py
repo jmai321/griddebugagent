@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
@@ -907,11 +908,14 @@ def run_rediagnose(req: ReDiagnoseRequest):
         print(f"[REDIAGNOSE] Power flow failed: {e}")
 
     # Run both diagnosis pipelines
+    baseline_start = time.time()
     baseline_result = _baseline_agent.diagnose(net, network_name=req.network)
+    baseline_latency_ms = round((time.time() - baseline_start) * 1000, 1)
     baseline_report = baseline_result["response"]
     baseline_structured = baseline_result.get("structured_output")
     baseline_status = "success" if not baseline_report.startswith("LLM call failed") else "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status, baseline_structured)
+    baseline["latencyMs"] = baseline_latency_ms
 
     # Use iterative debugger for agentic tab
     try:
@@ -920,7 +924,9 @@ def run_rediagnose(req: ReDiagnoseRequest):
         # Capture before state (broken network)
         before_state = _serialize_network_state(net_iter, run_pf=False)
         before_state["affected_components"] = baseline.get("parsedAffectedComponents", {})
+        agentic_start = time.time()
         iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        agentic_latency_ms = round((time.time() - agentic_start) * 1000, 1)
         # Capture after state (fixed network)
         after_state = _serialize_network_state(net_iter, run_pf=False)
         iter_report = iter_result["response"]
@@ -928,6 +934,7 @@ def run_rediagnose(req: ReDiagnoseRequest):
         if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
             iter_status = "error"
         agentic = _build_pipeline_result(iter_report, iter_status)
+        agentic["latencyMs"] = agentic_latency_ms
         fix_history = iter_result.get("fix_history", [])
         agentic["fixHistory"] = fix_history
         agentic["finalConverged"] = iter_result.get("final_converged", False)
@@ -992,13 +999,16 @@ def run_diagnose(req: DiagnoseRequest):
     user_query = (req.query or "").strip() or ""
 
     # --- Baseline pipeline ---
+    baseline_start = time.time()
     baseline_result = _baseline_agent.diagnose(net, network_name=req.network, user_query=user_query)
+    baseline_latency_ms = round((time.time() - baseline_start) * 1000, 1)
     baseline_report = baseline_result["response"]
     baseline_structured = baseline_result.get("structured_output")
     baseline_status = "success"
     if baseline_report.startswith("LLM call failed"):
         baseline_status = "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status, baseline_structured)
+    baseline["latencyMs"] = baseline_latency_ms
 
     # --- Agentic pipeline (using iterative debugger) ---
     try:
@@ -1007,7 +1017,9 @@ def run_diagnose(req: DiagnoseRequest):
         # Capture before state (broken network)
         before_state = _serialize_network_state(net_iter, run_pf=False)
         before_state["affected_components"] = baseline.get("parsedAffectedComponents", {})
+        agentic_start = time.time()
         iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network)
+        agentic_latency_ms = round((time.time() - agentic_start) * 1000, 1)
         # Capture after state (fixed network)
         after_state = _serialize_network_state(net_iter, run_pf=False)
         iter_report = iter_result["response"]
@@ -1015,6 +1027,7 @@ def run_diagnose(req: DiagnoseRequest):
         if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
             iter_status = "error"
         agentic = _build_pipeline_result(iter_report, iter_status)
+        agentic["latencyMs"] = agentic_latency_ms
         fix_history = iter_result.get("fix_history", [])
         agentic["fixHistory"] = fix_history
         agentic["finalConverged"] = iter_result.get("final_converged", False)
@@ -1077,11 +1090,15 @@ async def run_diagnose_stream(req: DiagnoseRequest):
     # ---------- sync helpers (run in thread pool) ----------
     def _run_baseline(net, network_name, user_query):
         try:
+            start = time.time()
             r = _baseline_agent.diagnose(net, network_name=network_name, user_query=user_query)
+            latency_ms = round((time.time() - start) * 1000, 1)
             report = r["response"]
             structured = r.get("structured_output")
             status = "error" if report.startswith("LLM call failed") else "success"
-            return _build_pipeline_result(report, status, structured)
+            out = _build_pipeline_result(report, status, structured)
+            out["latencyMs"] = latency_ms
+            return out
         except Exception as e:
             return {"analysisStatus": "error", "rootCauses": [], "affectedComponents": [],
                     "correctiveActions": [], "rawResult": str(e)}
@@ -1094,7 +1111,9 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             # Capture before state (broken network)
             before_state = _serialize_network_state(s.net, run_pf=False)
             before_state["affected_components"] = affected_components or {}
+            start = time.time()
             r = _iterative_agent.diagnose(s.net, network_name=network_name)
+            latency_ms = round((time.time() - start) * 1000, 1)
             # Capture after state (fixed network)
             after_state = _serialize_network_state(s.net, run_pf=False)
             report = r["response"]
@@ -1102,6 +1121,7 @@ async def run_diagnose_stream(req: DiagnoseRequest):
             if report.startswith("Agent loop error") or report.startswith("LLM call failed"):
                 status = "error"
             out = _build_pipeline_result(report, status)
+            out["latencyMs"] = latency_ms
             fix_history = r.get("fix_history", [])
             out["fixHistory"] = fix_history
             out["finalConverged"] = r.get("final_converged", False)
@@ -1246,13 +1266,16 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
     # --- Baseline pipeline ---
     # Note: Don't pass req.description as user_query - it's the scenario description, not a query.
     # Passing it causes the LLM to use direct-answer format instead of diagnostic format.
+    baseline_start = time.time()
     baseline_result = _baseline_agent.diagnose(net, network_name=req.network, user_query="")
+    baseline_latency_ms = round((time.time() - baseline_start) * 1000, 1)
     baseline_report = baseline_result["response"]
     baseline_structured = baseline_result.get("structured_output")
     baseline_status = "success"
     if baseline_report.startswith("LLM call failed"):
         baseline_status = "error"
     baseline = _build_pipeline_result(baseline_report, baseline_status, baseline_structured)
+    baseline["latencyMs"] = baseline_latency_ms
 
     # --- Agentic pipeline (iterative debugger) ---
     try:
@@ -1262,7 +1285,9 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         before_state = _serialize_network_state(net_iter, run_pf=False)
         before_state["affected_components"] = baseline.get("parsedAffectedComponents", {})
         agent_query = req.description if response_type == "direct_answer" else ""
+        agentic_start = time.time()
         iter_result = _iterative_agent.diagnose(net_iter, network_name=req.network, user_query=agent_query)
+        agentic_latency_ms = round((time.time() - agentic_start) * 1000, 1)
         # Always generate query summary if user provided a description
         if not agent_query and req.description.strip() and "query_summary" not in iter_result:
             iter_result["query_summary"] = _iterative_agent._generate_query_summary(
@@ -1275,6 +1300,7 @@ def run_diagnose_nl(req: DiagnoseNLRequest):
         if iter_report.startswith("Agent loop error") or iter_report.startswith("LLM call failed"):
             iter_status = "error"
         agentic = _build_pipeline_result(iter_report, iter_status)
+        agentic["latencyMs"] = agentic_latency_ms
         fix_history = iter_result.get("fix_history", [])
         agentic["fixHistory"] = fix_history
         agentic["finalConverged"] = iter_result.get("final_converged", False)
